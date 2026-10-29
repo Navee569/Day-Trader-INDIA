@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+trader/
+.env
+.env.*
+*.token
+*.key
+*.pem
+*.log
+build/
+dist/
+Thumbs.db
+.DS_Store
