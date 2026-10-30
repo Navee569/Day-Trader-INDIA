@@ -77,9 +77,15 @@ def risk_review(order: dict, as_of: str | None = None, state: dict | None = None
         reasons.append("INVALID_TICKER")
     if now.weekday() >= 5 or not time(9, 30) <= now.time() <= time(15, 10):
         reasons.append("OUTSIDE_NORMAL_ENTRY_WINDOW")
-    trigger = as_datetime(order.get("trigger_at"))
-    if trigger.date() != now.date() or (now - trigger).total_seconds() > 300 or now < trigger:
-        reasons.append("STALE_OR_FUTURE_ENTRY")
+    if not order.get("trigger_at"):
+        reasons.append("UNTRIGGERED_PLAN")
+    else:
+        try:
+            trigger = as_datetime(order["trigger_at"])
+            if trigger.date() != now.date() or (now - trigger).total_seconds() > 300 or now < trigger:
+                reasons.append("STALE_OR_FUTURE_ENTRY")
+        except (ValueError, TypeError, KeyError):
+            reasons.append("INVALID_TRIGGER_TIME")
     if decimal(order.get("planned_loss_inr", 0), "planned loss") > decimal(order.get("max_loss_inr", 0), "max loss"):
         reasons.append("PER_TRADE_LOSS_LIMIT")
     daily_loss = decimal(state.get("daily_planned_loss_inr", 0), "daily planned loss")

@@ -24,7 +24,6 @@ You can give the app a ticker directly; you do **not** have to prepare candle fi
 
 ```powershell
 python -m india_trader orb RELIANCE --as-of 2026-10-29T10:30:00+05:30
-python -m india_trader orb 500325 --exchange BSE --as-of 2026-10-29T10:30:00+05:30
 ```
 
 For a list of tickers, put one symbol per line in `watchlist.txt`, then run `python -m india_trader scan --watchlist watchlist.txt --as-of 2026-10-29T10:30:00+05:30`. The watchlist is limited to 10 symbols per run. Use CSV or JSON input when you want to analyze your own verified bars or work offline.
@@ -34,7 +33,6 @@ For a list of tickers, put one symbol per line in `watchlist.txt`, then run `pyt
 ```powershell
 python -m india_trader fetch RELIANCE --out trader\reliance.json
 python -m india_trader orb --json trader\reliance.json --out trader\reliance_orb.json
-python -m india_trader fetch 500325 --exchange BSE --out trader\bse.json
 ```
 
 The public Yahoo Finance chart endpoint is **unofficial**: intermittent HTTP errors, delays, data gaps, historical limits and rate limiting can occur. `fetch` only allows 5-minute bars with `--range 1d`, `5d` or `1mo`. The program refuses many invalid candles and does not silently fill missing trading bars. It does not verify prices against NSE/BSE. Validate symbols, exchange, freshness, lot type, calendar, and corporate actions separately; do not assume the latest session is today's session.
@@ -62,6 +60,22 @@ The backtest only uses **complete 72-bar, gap-free sessions ending at 15:15 IST 
 
 ### Scanner
 
+The original scanner's three workflows now have an NSE EQ adaptation. Run this to create the official NSE EQ list, scan daily closes across that list, and scan five-minute opening-range candidates:
+
+```powershell
+python -m india_trader scanner universe
+python -m india_trader scanner daily --show 20
+python -m india_trader scanner orb --at 10:15 --show 20
+```
+
+`daily` uses the original five setup rules on unofficial Yahoo batch closes. `orb` uses the original two-stage method: batch closes first, then full OHLCV charts for candidates. Its default `--max-confirm 200` verifies the 200 most traded candidates; `--max-confirm 0` requests all of them. A partial result reports the exact number left unconfirmed. Both write `trader/watchlist.json` with `hits[].symbol` for the next workflow. Use `--no-write` to inspect without changing that file, `--json` for complete counts, `--symbols RELIANCE,TCS` or `--watchlist FILE` for a smaller run, and `--offline PATH --now "2026-10-28 10:15"` to replay saved Yahoo JSON. The source is unofficial and a historical `--at` replay is not a live signal.
+
+On 29 October 2026, the official list contained 2,368 NSE EQ names. A full Yahoo daily run fetched 2,366, scanned 1,027 after quality/liquidity checks, and found 322 setup matches. A 10:15 IST intraday replay fetched 2,366, found 1,367 usable charts and 949 stage-one candidates; it confirmed 200, found 120 matches among those, and labeled the other 749 candidates **unconfirmed**. These are observed coverage counts for that run, not a performance measure. NSE daily Bhavcopy is also available through `daily-scan`, described below. The scanner has no exchange-verified five-minute feed.
+
+For optional BSE security-master coverage, `python -m india_trader scanner universe --exchange BSE --no-write --json` reads [BSE's public SCRIP.ZIP](https://www.bseindia.com/downloads/Help/file/scrip.zip) in memory and keeps active one-share-lot cash equities in groups A/B/X/T/XT. `--exchange BOTH` combines the NSE and BSE lists. The 29 October 2026 BSE master yielded 4,126 filtered codes; both lists together yielded 6,494 exchange-specific entries. **BSE chart coverage is not validated:** Yahoo returned no chart for the official numeric codes `500325.BO` and `532540.BO` in a two-symbol check, and the `RELIANCE.BO` alias had too little daily history. A BSE-inclusive list may therefore produce many failed or unusable charts. Use the default NSE universe for the validated scanner path. Neither exchange has a verified five-minute feed in this app.
+
+The older `scan --watchlist` command below remains a ten-symbol single-stage research check; use `scanner` for the marketwide workflow.
+
 To build an NSE cash-equity `EQ` symbol list from NSE's public CSV, run:
 
 ```powershell
@@ -82,7 +96,7 @@ To inspect a small live *research* watchlist, create `watchlist.txt` with one NS
 python -m india_trader scan --watchlist watchlist.txt --out trader\scan.json
 ```
 
-Default limit: **10 tickers per run**. This is **not** an NSE-wide or Nifty 500 real-time scanner. Avoid rapidly polling the public endpoint; check the provider's terms and applicable market data permissions.
+Default limit for this older command: **10 tickers per run**. Avoid rapidly polling the public endpoint; check the provider's terms and applicable market data permissions.
 
 ### One-command paper research cycle
 
@@ -124,7 +138,7 @@ python -m india_trader entry --csv examples/SYNTHETIC_TEST_BARS.csv --as-of 2026
 python -m india_trader exit --from-entry trader/entry.json --stop or-mid --target 2R --tick 0.05 --out trader/exit.json
 ```
 
-The example produced a hypothetical entry ₹103, stop ₹100, and target ₹109. The synthetic dataset is for checking code, not a real stock signal. There is no continuous background entry watch yet.
+The example produced a hypothetical entry ₹103, stop ₹100, and target ₹109. The synthetic dataset is for checking code, not a real stock signal. The separate `entry-timer watch` command provides a bounded foreground watch.
 
 ### Paper budget, risk, and ticket
 
@@ -136,13 +150,77 @@ python -m india_trader risk --order trader/order.json --out trader/risk.json
 python -m india_trader paper-ticket --order trader/order.json --risk trader/risk.json --out trader/ticket.json
 ```
 
+### Budget Manager: sixth upstream workflow
+
+The expanded `budget-manager` command reads the saved `trader/plan.json` from `exit-planner`, an optional `trader/config.json`, and optional dated local prices and paper cash. `examples/BUDGET_CONFIG_INDIA.json` shows the INR settings. Supply hypothetical capital with `--budget INR` or `budget_inr` in your config; the example has no prefilled capital. `--now` pins an IST replay clock. This remains paper research, even if a historical risk check passes on a pinned clock.
+
+```powershell
+python -m india_trader budget-manager --budget 100000 --write
+python -m india_trader risk --order trader/orders.json --out trader/risk.json
+python -m india_trader budget-manager --budget 100000 --limit --write
+python -m india_trader budget-manager --budget 100000 --weights RELIANCE=40,TCS=60
+```
+
+Single-trade size is the smallest whole-share count allowed by **four limits**: maximum assumed loss after a fee buffer, maximum position percentage, maximum single order, and cash after a reserved buffer. The report names the binding limit and refuses zero shares, a below-minimum order, insufficient reward:risk, wrong-day/blocked/short plans, or a target already passed. `--limit` uses the plan price; `--limit PRICE` sizes at that hypothetical limit. For market-reference sizing, a higher local price is used only when its file has an offset-aware timestamp no more than 15 minutes old. The default assumptions are a ₹500 max loss, 20% position cap, ₹25,000 max order, 10% cash buffer, 10 bps per-side slippage and a ₹50 fee buffer; edit the config for your own **paper** scenario. These are assumptions, not a complete Indian charges or fill model.
+
+`--write` saves a paper proposal collection at `trader/orders.json`. The existing `risk` and `paper-ticket` commands accept a collection containing exactly one stop-and-target proposal. A refusal overwrites the saved collection with zero proposals, so a stale proposal cannot be reused accidentally. Weights mode accepts `--weights` or a `--targets` JSON file; it renormalizes after blocked/zero/top-N filters, caps overweight slices, drops undersized slices, and reports idle cash. Without a dated `--prices` file it shows **indicative INR allocations only**. With prices it rounds to whole shares but marks every allocation `UNREVIEWED_NO_STOP`; each ticker needs its own exit plan before paper risk approval. The calculation assumes a one-share market lot; verify the security's series and lot before relying on it. [NSE's normal-market trading-system description](https://www.nseindia.com/static/products-services/equity-market-trading-system) says the market lot is one for shares in compulsory dematerialised mode. No fractional cash shares, broker orders, or simulated fills are created.
+
+### News monitor (upstream workflow 2, India adaptation)
+
+```powershell
+python -m india_trader news --tickers RELIANCE TCS --dry-run
+python -m india_trader news --json
+```
+
+The first command checks two examples without saving seen-item state. The second reads scanner watchlist hits, a saved plan, and portfolio positions; `trader/universe.txt` supplies company names. The monitor reads public NSE RSS feeds for announcements, financial results, board meetings, corporate actions, and insider trading. It checks Yahoo India headlines and uses Google News India RSS when Yahoo has no recent company-matched result. Yahoo chart metadata provides an unofficial price-versus-previous-close line, with a 3% move marker. There is no order placement or broker login.
+
+By default it shows only new items from the last 48 hours and remembers fingerprints for 30 days in `trader/state/news.json`. Use `--all` to include seen items, `--hours N` for the lookback, `--feeds announcements,corporate_actions` to select filing categories, `--no-nse`, `--no-headlines`, or `--no-moves` to omit a source, and `--offline DIR --now ISO_TIME` to replay saved feeds. `--json` reports each feed's status and a `partial` flag. Exit code 1 means there are no new items. The free NSE announcements RSS can cover much less than 48 hours and may omit individual filing links; a company-search link is **not** the filing itself. Open the actual NSE document or news article before relying on an item. A quiet or partial result cannot establish that no company event occurred. [NSE's RSS directory](https://www.nseindia.com/static/rss-feed) lists the public feeds.
+
+### Entry timer (upstream workflow 3, India adaptation)
+
+```powershell
+python -m india_trader entry-timer check RELIANCE
+python -m india_trader entry-timer check RELIANCE --setup level --level 1200 --interval 1m
+python -m india_trader entry-timer watch RELIANCE --until 15:10
+python -m india_trader entry-timer watchlist
+```
+
+The timer uses NSE cash-equity bars from unofficial Yahoo charts; it accepts saved chart JSON for offline replay. Its default ORB level is the high of completed bars from 09:15–09:30 IST. A completed close above the level is a paper signal; a wick or forming bar does not count. `--interval 1m` and `5m`, a fixed `--setup level --level PRICE`, `--or-minutes N`, and optional `--min-volume-x N` work in `check`, `watch`, and `watchlist`. `watchlist` reads scanner hits; a level setup may read `hits[].level`. `watch` polls while the program and computer are awake, stops at the configured cutoff, saves a trigger to `trader/entry.json`, and remembers that setup so it does not save it twice. `check --write` saves a single result. `--offline PATH --now ISO_TIME` replays a saved chart on a simulated clock.
+
+The normal research window ends at 15:15 IST to avoid NSE closing-auction ambiguity; the last new-entry cutoff is 15:10. The timer validates the completed-bar grid, exchange symbol, currency, gaps, holiday date, provider last-trade time, and a one-minute live settling delay. It reports missing/zero volume. With a requested volume threshold, missing volume blocks the setup. A historical signal, even if the command says `TRIGGERED`, is **not** a current entry, fill, or order. Current Yahoo bars are unofficial and may lag. The NSE holiday list covers 2026; BSE and special sessions are not supported by this timer. See [NSE market timings](https://www.nseindia.com/static/market-data/market-timings) and [NSE closing auction](https://www.nseindia.com/static/products-services/closing-auction-session).
+
+### Exit planner (upstream workflow 4, India adaptation)
+
+```powershell
+python -m india_trader exit-planner plan --tick 0.05 --write
+python -m india_trader exit-planner show
+python -m india_trader exit-planner plan --symbol RELIANCE --entry 1200 --stop pct:1 --tick 0.05 --date 2026-10-30
+```
+
+The first command reads `trader/entry.json` from the entry timer, calculates an opening-range midpoint stop and 2R target, and saves `trader/plan.json` for the paper budget step. The second shows that saved plan. The third is a **hypothetical plan ahead**, not a trigger. Replace `0.05` with the instrument's verified current NSE tick size; this example does not establish RELIANCE's tick. NSE [reviews tick size by security](https://nsearchives.nseindia.com/content/circulars/CMTR62174.pdf), so this command requires an explicit assumption.
+
+Stop choices are `or-mid`, `or-low`, `price:X`, `pct:X`, and `atr:K`; targets are `1R`, `1.5R`, `2R`, or `price:X`. ATR uses one-minute or five-minute session bars through the entry close, available from a saved Yahoo chart with `--offline PATH` or a fresh public fetch. It rejects missing/gapped histories and reports when fewer than 14 bars were used. The stop rounds down to the chosen tick and the target rounds half up. `--flat-by HH:MM` and optional `trader/config.json` set a latest exit time no later than 15:10 IST; an entry at or after that time is refused. The plan records risk per share, reward:risk, source, volume quality, and warnings. A plan made ahead has no trigger and cannot pass the paper risk check. This is a plan for a paper exit, not a stop order or guaranteed fill.
+
 ## Using ChatGPT (without Claude)
 
 Upload this ZIP and ask ChatGPT to inspect `SKILL.md` and analyze **your verified candle CSV**. A standard chat does not automatically access your Windows filesystem or run this repository locally. To execute programs directly on your Windows PC use Python or Codex CLI/IDE; some ChatGPT workflows can run code in their own environment but aren't a local installation.
 
 ## Using Codex (without Claude)
 
-Open the extracted folder in Codex; `AGENTS.md` is the repo policy file and `.agents/skills/india-day-trader/SKILL.md` is a valid repository-local Agent Skill. Codex supports repo skills in `.agents/skills` and explicit `$india-day-trader` invocation. Ask: **“Use $india-day-trader; run tests, then analyze the provided CSV and explain the 15-minute ORB. Keep it paper-only.”** If skills aren't listed, restart Codex and point it directly to the skill file. Codex uses the Python installed in its environment; make sure your shell can run `python`.
+Open the folder in Codex; `AGENTS.md` is the repo policy file. `.agents/skills/india-trader-scanner/SKILL.md` covers the scanner, `.agents/skills/india-trader-news/SKILL.md` covers the news monitor, `.agents/skills/india-trader-entry/SKILL.md` covers the entry timer, `.agents/skills/india-trader-exit/SKILL.md` covers the exit planner, `.agents/skills/india-trader-time-machine/SKILL.md` covers Time Machine, `.agents/skills/india-trader-budget/SKILL.md` covers INR budget sizing, and `.agents/skills/india-day-trader/SKILL.md` covers the other paper research commands. Invoke the matching `$india-trader-*` skill for each implemented workflow. Codex uses the Python installed in its environment; make sure your shell can run `python`.
+
+### Time Machine: fifth upstream workflow
+
+After `exit-planner plan --write` saves `trader/plan.json`, run:
+
+```powershell
+python -m india_trader time-machine run --write
+python -m india_trader time-machine chart --from trader/timemachine.json
+```
+
+The first command fetches an unofficial 60-day Yahoo five-minute chart, uses at least 20 complete prior 09:15–15:15 IST sessions, runs 10,000 seeded scenario paths (seed 19), and replays the opening-range rule over those past sessions. `--offline SAVED_CHART.json` gives a repeatable run; `--now ISO_TIME` pins the completed-bar cutoff. `--replays N`, `--seed N`, `--window N`, and `--until HH:MM` are supported. Manual `--symbol`, `--date`, `--entry`, `--stop`, `--target`, and `--entry-time` flags make a hypothetical plan. A saved result contains four odds, exit-time price quantiles, average R, historical rule results, verdict, percentile bands, sample paths and histogram. The chart command renders the saved bands and histogram in text.
+
+Only the first 72 five-minute bars (through 15:15 IST) are included to avoid closing-auction mechanics. The past-rule replay supports ORB; for non-ORB setups it reports that history is unavailable. ATR, price and percentage stops use the plan's percentage risk as an explicitly named historical proxy. The original's manual `--side sell` paper scenario is supported with `target < entry < stop`; the India exit planner and budget remain long-only, so a short scenario has no sizing handoff. The scenario odds are resampling fractions, not a forecast or profitability proof. The run excludes fees and market frictions, uses an assumed tick from the plan, and never places an order.
 
 ## Implemented vs NOT implemented
 
@@ -153,23 +231,29 @@ Open the extracted folder in Codex; `AGENTS.md` is the repo policy file and `.ag
 | Completed 15-minute ORB + fail-closed gaps/staleness | Implemented and tested |
 | Hypothetical INR risk/position/target planner | Implemented and tested |
 | Historical session replay and descriptive win rate | Implemented and tested on synthetic data |
-| Watchlist scanner (up to 10) and offline folder scanner | Implemented and tested offline |
+| Original scanner workflow: NSE EQ universe, daily setups, two-stage marketwide ORB, watchlist handoff | Implemented for NSE EQ with actual full-list and offline tests; Yahoo five-minute data remains unofficial and can yield partial coverage |
+| Older watchlist scanner (up to 10) and offline CSV folder scanner | Implemented and tested offline |
 | Codex Agent Skill / ChatGPT workflow documentation | Included |
-| NSE EQ daily universe / BSE universe | NSE EQ list and official daily marketwide scan implemented; BSE not implemented |
+| NSE EQ / BSE security universes | NSE EQ list and filtered BSE cash-equity master implemented; BSE Yahoo candle coverage is not validated |
 | Independent five-minute candle sources | Read-only Upstox adapter prepared but not account-tested; unofficial Yahoo fallback tested |
-| Entry, exit, budget, risk, paper ticket | Basic handoff implemented and tested offline; no background watch or simulated fill ledger |
+| Original entry timer: check, bounded watch, scanner watchlist, one-/five-minute ORB/level, once-only paper handoff | Implemented and offline tested; live polling during market hours remains unverified |
+| Original exit planner: plan ahead/confirmed entry, five stops, R/price targets, ATR, show/save, tick and flat-by checks | Implemented and offline tested; tick is an explicit assumption and Yahoo ATR data is unofficial |
+| Original Time Machine: seeded 10,000-path scenarios, 60-day full-session pool, historical ORB rule replay, verdict, saved fan chart/histogram | Implemented and offline tested for NSE cash-equity paper research, including manual sell-side replay; Yahoo bars are unofficial and outcomes are not calibrated probabilities |
+| Original budget manager: four-limit paper sizing, fresh quote, limit, blocked/minimum/reward gates, weighted allocation | Implemented and offline tested in INR; weighted cash shares are whole-share or indicative only, with no-stop allocations blocked by risk review |
+| Risk and paper ticket | Basic handoff implemented and tested offline; no simulated fill ledger |
 | Real-time exchange-approved live market feed | **Not implemented** |
-| Indian corporate filings/news/financial statements NLP | **Not implemented** |
+| Original news monitor: NSE RSS filings, India headlines, price moves, deduplication, state, offline replay | Implemented and offline tested; public RSS horizon is short and filing links can be missing |
+| Financial statement analysis/NLP and complete filing archive | **Not implemented** |
 | Marketwide sentiment/realtime alerts | **Not implemented** |
 | Indian exchange holiday + Muhurat + special-auction calendar | **Not implemented** |
 | Broker API, order placement, broker fees, tax engine | **Not implemented (safety boundary)** |
-| Original 11 Claude skills, full parity / Monte Carlo 10,000 | **Not implemented** |
+| Original 11 Claude skills, full parity | **Not implemented**; first six adapted workflows are present |
 | Graphical UI | **Not implemented** |
 
 **Why not claim full parity?** US SEC/EDGAR, Pelosi disclosures, Alpaca MCP and US-specific trading rules are not Indian market components and cannot be truthfully relabeled as NSE/BSE integrations. Real equivalents require different audited feeds, policies, connectors and independent acceptance tests.
 
 ## QA and provenance
 
-See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. This later working state passed 109 offline tests on Windows Python 3.11. NSE daily Bhavcopy and Yahoo paper-cycle smoke checks ran; Upstox, CM Market Live during market hours, exchange holidays, actual order execution and profitability have **not** been validated. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
+See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. This later working state passed 160 offline tests on Windows Python 3.11. NSE daily Bhavcopy, NSE/BSE security masters, Yahoo scanner, Yahoo paper-cycle, and public NSE/India news feed smoke checks ran; Upstox, CM Market Live during market hours, actual order execution and profitability have **not** been validated. The scanner has a built-in 2026 NSE holiday list, but special sessions and future calendars remain unverified. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
 
 Sources: [NSE tick-size circular](https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf), [2026 closing-auction timing reference](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/what-are-the-market-timings), [NSE market timings](https://www.nseindia.com/static/market-data/market-timings), [OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills), [upstream project](https://github.com/Jakeschincariol/day-trader-skill).

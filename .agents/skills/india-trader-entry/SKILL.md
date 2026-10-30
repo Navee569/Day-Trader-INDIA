@@ -1,0 +1,14 @@
+---
+name: india-trader-entry
+description: Check or watch completed one-minute or five-minute NSE cash-equity bars for an opening-range or price-level paper entry; inspect scanner watchlist hits. Use for entry timing, watching a setup, or checking whether a breakout closed.
+---
+
+# India Trader Entry Timer
+
+Run `python -m india_trader entry-timer check RELIANCE` for one check, `python -m india_trader entry-timer watch RELIANCE --until 15:10` to poll until a trigger or cutoff, or `python -m india_trader entry-timer watchlist` to check every scanner hit. Use `--interval 1m` for one-minute bars or the default `5m`. `--setup level --level PRICE` checks a fixed level; the default `orb` uses the high of the first 15 minutes from 09:15 IST. `--or-minutes N` changes the range. `--min-volume-x N` requires the trigger bar's volume to meet a multiple of the opening range's average. Long cash equities only. A close **above** the level on a completed bar is a paper signal; a wick or forming bar does not count.
+
+`check --write` saves `trader/entry.json`; a successful `watch` saves it automatically for the paper exit planner. `watch` also records a once-only setup key in `trader/state/entry_watch.json`, so a restart will not save the same setup again. `--every N` controls polling seconds. `--offline FILE_OR_DIR --now 2026-10-29T09:15:00+05:30` replays saved Yahoo chart JSON without waiting in real time. A folder may contain `RELIANCE.NS.json` or `.json.gz`. `watchlist --watchlist PATH` reads `hits[].symbol`, with optional `hits[].level` for level setups. `check` and `watchlist` accept `--json`.
+
+The conservative normal NSE window is 09:15–15:15 IST, with new paper entries only through 15:10 by default. `trader/config.json` may move `no_entries_before` or `no_entries_after` **within** the 09:15–15:10 window. The timer uses the scanner's verified 2026 NSE holiday list and treats unverified future calendars or special sessions as unavailable. BSE, special pre-open, call auctions, Muhurat timing, and CAS after 15:15 are not covered. The live Yahoo feed is unofficial and may lag; a last-trade timestamp and a one-minute settling delay are required before a live bar counts. The price-only rule permits a chart with zero/missing volume but marks `volume_quality`; an explicit `--min-volume-x` fails closed if volume is unreliable. Always report the source, timestamp, bar completion, gaps, volume quality, age, and paper-only status. A historical replay is not a live alert or an order.
+
+After a trigger, run the separate paper exit planner with a verified tick assumption before considering any paper ticket. The timer does not place orders, size positions, or promise a profitable trade. A watch runs only while this command and the computer stay awake.

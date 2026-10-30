@@ -14,6 +14,12 @@ from .daily_scan import scan_nse_daily
 from .intraday_sources import fetch_preferred
 from .trade_workflow import entry_check, exit_plan
 from .paper_orders import size_paper_order, risk_review, paper_ticket
+from . import market_scanner
+from . import news_monitor
+from . import entry_timer
+from . import exit_planner
+from . import time_machine
+from . import budget_manager
 
 
 def attach_bars(p, symbol_optional=False):
@@ -36,8 +42,27 @@ def load_bars(args):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "scanner":
+        return market_scanner.main(argv[1:])
+    if argv and argv[0] == "news":
+        return news_monitor.main(argv[1:])
+    if argv and argv[0] == "entry-timer":
+        return entry_timer.main(argv[1:])
+    if argv and argv[0] == "exit-planner":
+        return exit_planner.main(argv[1:])
+    if argv and argv[0] == "time-machine":
+        return time_machine.main(argv[1:])
+    if argv and argv[0] == "budget-manager":
+        return budget_manager.main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m india_trader", description="NSE/BSE cash-equity research; PAPER ONLY")
     sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("scanner", help="Full NSE EQ universe, daily setup, and marketwide ORB scanner")
+    sub.add_parser("news", help="NSE disclosures, India headlines, and paper-only price context")
+    sub.add_parser("entry-timer", help="Check, watch, or inspect a watchlist for completed-bar paper entries")
+    sub.add_parser("exit-planner", help="Plan or show a paper stop, target, and flat-by time")
+    sub.add_parser("time-machine", help="Seeded paper scenario replay and historical ORB rule check")
+    sub.add_parser("budget-manager", help="Four-limit INR paper trade sizing and weighted allocation")
     f = sub.add_parser("fetch", help="Fetch 5-minute bars: read-only Upstox if configured, then Yahoo")
     f.add_argument("symbol")
     f.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
@@ -202,6 +227,11 @@ def main(argv=None):
         elif args.cmd == "risk":
             with open(args.order, encoding="utf-8") as stream:
                 order = json.load(stream)
+            if isinstance(order, dict) and "orders" in order:
+                proposals = order["orders"]
+                if not isinstance(proposals, list) or len(proposals) != 1:
+                    raise ValueError("Risk review needs exactly one paper proposal")
+                order = proposals[0]
             state = None
             if args.state:
                 with open(args.state, encoding="utf-8") as stream:
@@ -211,6 +241,11 @@ def main(argv=None):
         elif args.cmd == "paper-ticket":
             with open(args.order, encoding="utf-8") as stream:
                 order = json.load(stream)
+            if isinstance(order, dict) and "orders" in order:
+                proposals = order["orders"]
+                if not isinstance(proposals, list) or len(proposals) != 1:
+                    raise ValueError("Paper ticket needs exactly one risk-reviewed proposal")
+                order = proposals[0]
             with open(args.risk, encoding="utf-8") as stream:
                 review = json.load(stream)
             approved = args.approve and input("Type YES to approve this exact PAPER ticket (no fill): ").strip() == "YES"
