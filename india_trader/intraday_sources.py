@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
+from urllib.request import HTTPSHandler, HTTPRedirectHandler, build_opener
 
 from .core import IST, DataError, parse_bars, symbol
 from .data import fetch_bars as yahoo_bars
@@ -16,10 +17,18 @@ UPSTOX = "https://api.upstox.com/v3/historical-candle"
 MAX_RESPONSE = 8 * 1024 * 1024
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise DataError("Upstox redirect refused to protect the analytics token")
+
+
 def parse_upstox_candles(payload: dict) -> list[dict]:
     if not isinstance(payload, dict) or payload.get("status") != "success":
         raise DataError("Upstox did not return successful candle data")
-    candles = (payload.get("data") or {}).get("candles")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise DataError("Upstox candle data must be an object")
+    candles = data.get("candles")
     if not isinstance(candles, list):
         raise DataError("Upstox candle list is missing")
     rows = []
@@ -32,9 +41,11 @@ def parse_upstox_candles(payload: dict) -> list[dict]:
 
 
 def _upstox_get(url: str, token: str) -> list[dict]:
+    if not isinstance(url, str) or not url.startswith(UPSTOX + "/"):
+        raise DataError("Upstox candle URL must use the official HTTPS endpoint")
     request = urllib.request.Request(url, headers={"Accept": "application/json",
                                                    "Authorization": "Bearer " + token})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with build_opener(_NoRedirect, HTTPSHandler).open(request, timeout=15) as response:
         raw = response.read(MAX_RESPONSE + 1)
     if len(raw) > MAX_RESPONSE:
         raise DataError("Upstox response exceeds size limit")
@@ -97,4 +108,7 @@ def fetch_preferred(ticker: str, range_: str = "5d") -> dict:
                 "attempts": attempts, "exchange_verified": False}
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
         attempts.append({"source": "Yahoo", "status": "FAILED", "reason": type(exc).__name__})
-        raise DataError("All configured five-minute candle sources failed") from exc
+        detail = str(exc)
+        if ticker.endswith(".BO") and ticker[:-3].isdigit():
+            detail += "; Yahoo may require the verified BSE trading symbol instead of the numeric scrip code"
+        raise DataError("All configured five-minute candle sources failed: " + detail) from exc

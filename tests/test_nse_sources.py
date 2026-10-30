@@ -70,3 +70,20 @@ class NSESourcesTests(unittest.TestCase):
         self.assertEqual(result['status'], 'MARKET_CLOSED')
         self.assertIsNone(result['quote'])
         post.assert_not_called()
+
+    @patch('india_trader.nse_sources._mcp_post')
+    def test_exchange_holiday_and_unknown_year_do_not_claim_a_quote(self, post):
+        holiday = cm_live_quote('RELIANCE', datetime(2026, 10, 20, 10, 0, tzinfo=IST))
+        self.assertEqual(holiday['status'], 'MARKET_CLOSED')
+        unknown = cm_live_quote('RELIANCE', datetime(2027, 10, 29, 10, 0, tzinfo=IST))
+        self.assertEqual(unknown['status'], 'UNAVAILABLE')
+        post.assert_not_called()
+
+    @patch('india_trader.nse_sources._mcp_post')
+    def test_empty_quote_result_is_unavailable(self, post):
+        post.side_effect = [({'result': {}}, 'session'), ({}, None),
+                            ({'result': {'tools': [{'name': 'get_stock_quote', 'inputSchema': {
+                                'properties': {'symbol': {}}, 'required': ['symbol']}}]}}, None),
+                            ({'result': {'content': []}}, None)]
+        result = cm_live_quote('RELIANCE', datetime(2026, 10, 29, 10, 0, tzinfo=IST))
+        self.assertEqual(result['status'], 'UNAVAILABLE')

@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 from statistics import mean
 from .core import Bar, IST, DataError, OPEN, CLOSE, parse_bars, _consecutive
+from .market_calendar import NSE_2026_CLOSED
 
 
 def backtest_orb(rows, opening_minutes=15, reward_r=2.0, max_entry="11:30",
@@ -23,7 +24,7 @@ def backtest_orb(rows, opening_minutes=15, reward_r=2.0, max_entry="11:30",
         raise ValueError("max_entry must be HH:MM") from exc
     if not (time(9, 20) <= entry_limit <= time(15, 0)):
         raise ValueError("max_entry outside supported intraday window")
-    if not (isinstance(reward_r, (int, float)) and 0 < reward_r <= 20):
+    if not (not isinstance(reward_r, bool) and isinstance(reward_r, (int, float)) and 0 < reward_r <= 20):
         raise ValueError("reward_r must be positive and <=20")
     data = parse_bars(rows)
     sessions: dict[str, list[Bar]] = defaultdict(list)
@@ -34,6 +35,10 @@ def backtest_orb(rows, opening_minutes=15, reward_r=2.0, max_entry="11:30",
     for day, bars in sorted(sessions.items()):
         expected = datetime.combine(bars[0].timestamp.date(), OPEN, tzinfo=IST)
         entry = {"date": day, "status": "SKIP", "reason": ""}
+        if bars[0].timestamp.date() in NSE_2026_CLOSED:
+            entry["reason"] = "NSE_2026_PUBLISHED_HOLIDAY"
+            all_rows.append(entry)
+            continue
         if (bars[0].timestamp != expected or not _consecutive(bars) or
             (require_full_session and (len(bars) != 72 or bars[-1].timestamp.time() != time(15,10)))):
             entry["reason"] = "INCOMPLETE_OR_GAPPED_SESSION"

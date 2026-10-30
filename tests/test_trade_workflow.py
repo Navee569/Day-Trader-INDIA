@@ -44,3 +44,26 @@ class TradeWorkflowTests(unittest.TestCase):
         data[3]['volume'] = 0
         result = entry_check(data, 'RELIANCE.NS', as_of='2026-10-28T09:35:00+05:30')
         self.assertEqual(result['status'], 'ZERO_VOLUME_BAR')
+
+    def test_exit_rejects_extreme_tick_without_decimal_overflow(self):
+        entry = entry_check(bars(), 'RELIANCE.NS', as_of='2026-10-28T09:35:00+05:30')
+        with self.assertRaisesRegex(ValueError, 'tick must be'):
+            exit_plan(entry, tick_size='1e-999999')
+
+    def test_old_breakout_cannot_generate_a_new_exit_plan(self):
+        entry = entry_check(bars(), 'RELIANCE.NS', as_of='2026-10-28T09:45:00+05:30')
+        self.assertEqual(entry['status'], 'STALE_SIGNAL')
+        with self.assertRaisesRegex(ValueError, 'triggered entry'):
+            exit_plan(entry, tick_size='0.05')
+
+    def test_level_entry_blocks_stale_quote_series(self):
+        entry = entry_check(bars(), 'RELIANCE.NS', setup='level', level=101,
+                            as_of='2026-10-28T10:00:00+05:30')
+        self.assertEqual(entry['status'], 'STALE_DATA')
+
+    def test_nse_holiday_cannot_trigger_paper_entry(self):
+        data = bars()
+        for row in data:
+            row['timestamp'] = row['timestamp'].replace('2026-10-28', '2026-10-20')
+        result = entry_check(data, 'RELIANCE.NS', as_of='2026-10-20T09:35:00+05:30')
+        self.assertEqual(result['status'], 'NSE_REGULAR_SESSION_UNVERIFIED_OR_CLOSED')

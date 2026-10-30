@@ -1,5 +1,11 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## 30 October 2026 local follow-up
+
+The original audit below describes v0.2.1 and is retained as historical evidence. The current working copy has additional code through feature 7. On Linux Python 3.12, 146 offline tests pass; package compilation passes; the synthetic CLI entry → exit → budget → risk → approval → simulated partial fill → cancel remainder → approved flatten → simulated close workflow leaves no open shares and ₹100006 in paper cash from ₹100000. Another 500 randomized paper round trips reconciled cash and holdings. An adversarial million-share proposal with forged loss/notional and a recomputed fingerprint is now blocked. A second process waits on the ledger lock. Upstox sandbox HTTP behavior is mocked, not account-tested.
+
+During the 30 October market session, unofficial Yahoo provided five-minute RELIANCE and TCS candles; old entry triggers were rejected as stale. NSE daily Bhavcopy and universe retrieval worked. NSE's CM Market Live MCP initialized but a quote call returned HTTP 404, so an in-session official quote was not validated. The market is closed for subsequent checks. The published 2026 NSE EQ holidays are a static gate; special sessions, ad hoc changes, BSE-specific closures and future years remain unverified. This is still paper research with no demonstrated strategy edge or real brokerage execution. The new Windows lock path has not been run on Windows.
+
 **Audit:** 2026-10-29, second-pass review of the supplied `Day_Trader_India_ChatGPT_Codex_v0.2_AUDITED.zip` and corrected v0.2.1.  
 **Verdict:** **PASS for the tested offline Python-only paper research subset**. **FAIL / NOT READY** as a complete 11-skill port, live Indian stock-market trading system, production scanner, brokerage integration, or credible trading signal provider. No profit/strategy edge verified.
 

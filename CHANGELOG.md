@@ -1,5 +1,27 @@
 # Changelog
 
+## Deep audit of implemented workflow areas 1–7 — 30 October 2026
+
+- Risk now independently recomputes order notional and planned loss, and rejects malformed state, invalid side, manipulated allocation, or a recomputed fingerprint hiding inconsistent terms. Budget and exit reject extreme numbers before arithmetic can overflow.
+- Entry refuses old trigger and level data; risk, sandbox entry and replay block the published 2026 NSE EQ holiday dates. The calendar is a static snapshot, not a verified live session service.
+- Broker CLI transactions use an OS file lock. Ledger load/save rejects duplicate IDs, mismatched fills, and invalid positions. Approved tickets carry a terms digest; attempted sandbox sends/cancels can be reconciled after process interruption without retrying.
+- Sandbox placement accepts only the exact validated market-delivery payload; instrument master validation requires a matching ISIN and rejects malformed keys, quantities, lots, freeze limits and compressed files with controlled errors. Read-only Upstox requests refuse redirects and malformed candle responses.
+- Deep offline checks include adversarial forged orders, concurrent CLI access, and 500 randomized paper round trips. Live five-minute Yahoo fetch/entry were rechecked during the market session; NSE MCP still returned HTTP 404 after initialization. No account-backed Upstox or sandbox transaction was attempted.
+
+## Local live-session validation — 30 October 2026
+
+- Corrected Yahoo's trailing in-progress off-grid quote update so it cannot invalidate the entire five-minute candle series. Kept rejection of irregular timestamps inside the series; added two focused regressions.
+- Market-session validation results are reported separately from the offline suite; a retrieved Yahoo candle is unofficial and not an exchange-verified fill.
+- Corrected BSE Yahoo examples to use a trading symbol; a numeric BSE scrip code that Yahoo does not resolve now returns a more specific error.
+
+## Feature 7 paper broker
+
+- Added a paper-only broker ledger: exact proposal approval, fresh risk recheck, duplicate and cash reservation guard, manual simulated fills, position close, cancellation and event history.
+- The CLI requires explicit `YES` for submitting a paper proposal and `SIMULATE` for manually entered fills. No brokerage endpoint is connected.
+- Added offline tests for the ledger lifecycle, stale/changed/duplicate approvals, limits, persistence and the CLI confirmation gate.
+- Added decline, fingerprinted sell-to-close approval, plain ticket review, and an optional Upstox V3 sandbox-only place/cancel handoff with a separate ALLOW ONCE gate. Uncertain outcomes are persisted and require manual orderbook reconciliation. No live host or automatic fill.
+- Require cancellation/reconciliation of an outstanding entry remainder before a paper exit; require the exact approved exit ticket ID when one exists. Cross-check optional ISIN and security classification in the local instrument master.
+
 ## Post-audit development state — 29 October 2026
 
 - Added official NSE final Bhavcopy reader and marketwide daily scanner with the original five daily setup rules.

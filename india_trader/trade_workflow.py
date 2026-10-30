@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR
 
 from .core import IST, DataError, as_datetime, decimal, number, orb_signal, session_bars
+from .market_calendar import regular_nse_entry_day
 
 
 def entry_check(rows: list[dict], ticker: str, setup: str = "orb", level: float | None = None,
@@ -19,6 +20,8 @@ def entry_check(rows: list[dict], ticker: str, setup: str = "orb", level: float 
     day = session_bars(rows, cutoff.date().isoformat())
     base = {"mode": "PAPER_RESEARCH_ONLY", "ticker": ticker, "setup": setup,
             "as_of": cutoff.isoformat(), "bar_interval": "5m", "orders_possible": False}
+    if ticker.endswith(".NS") and not regular_nse_entry_day(cutoff.date()):
+        return {**base, "status": "NSE_REGULAR_SESSION_UNVERIFIED_OR_CLOSED"}
     if not day:
         return {**base, "status": "NO_DATA"}
     if day[0].timestamp.date() != cutoff.date():
@@ -30,6 +33,10 @@ def entry_check(rows: list[dict], ticker: str, setup: str = "orb", level: float 
         return {**base, "status": "ZERO_VOLUME_BAR"}
     if any(b.timestamp - a.timestamp != timedelta(minutes=5) for a, b in zip(completed, completed[1:])):
         return {**base, "status": "DATA_GAP"}
+    last_end = completed[-1].timestamp + timedelta(minutes=5)
+    if (cutoff.date() == last_end.date() and time(9, 15) < cutoff.time() < time(15, 15)
+            and cutoff - last_end > timedelta(minutes=10)):
+        return {**base, "status": "STALE_DATA", "last_complete_bar_end": last_end.isoformat()}
     range_high = range_low = None
     if setup == "orb":
         signal = orb_signal(rows, opening_minutes, cutoff, cutoff.date().isoformat())
@@ -61,6 +68,10 @@ def entry_check(rows: list[dict], ticker: str, setup: str = "orb", level: float 
         end = bar.timestamp + timedelta(minutes=5)
         if end.time() < time(9, 30) or end.time() > time(15, 10):
             return {**base, "status": "OUTSIDE_ENTRY_WINDOW", "trigger_at": end.isoformat()}
+        if cutoff - end > timedelta(minutes=5):
+            return {**base, "status": "STALE_SIGNAL", "trigger_at": end.isoformat(),
+                    "signal_age_minutes": round((cutoff - end).total_seconds() / 60, 2),
+                    "note": "Historical trigger; it is too old for a new paper entry"}
         return {**base, "status": "TRIGGERED", "entry_price": bar.close,
                 "trigger_at": end.isoformat(), "trigger_bar_start": bar.timestamp.isoformat(),
                 "level": threshold, "range_high": range_high, "range_low": range_low,
@@ -95,8 +106,8 @@ def exit_plan(entry: dict, stop_spec: str = "or-mid", target_spec: str = "2R",
         raise ValueError("Exit plan requires a triggered entry")
     price = decimal(entry["entry_price"], "entry price")
     tick = decimal(tick_size, "tick size")
-    if price <= 0 or tick <= 0:
-        raise ValueError("Entry and tick size must be positive")
+    if not (0 < price <= 1_000_000_000 and decimal("0.0001", "minimum tick") <= tick <= price):
+        raise ValueError("Entry must be positive and tick must be 0.0001 through the entry price")
     stop_note = None
     if stop_spec == "or-mid":
         if entry.get("range_high") is None or entry.get("range_low") is None:

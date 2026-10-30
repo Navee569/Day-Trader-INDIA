@@ -48,4 +48,13 @@ class TestAdditional(unittest.TestCase):
         r=backtest_orb(day(full=True))['sessions'][0]
         self.assertNotEqual(r['signal_bar_start'],r['entry_time'])
 
+    def test_published_nse_holiday_cannot_become_a_replay_trade(self):
+        result=backtest_orb(day('2026-10-20',full=True))
+        self.assertEqual(result['simulated_trades'],0)
+        self.assertEqual(result['sessions'][0]['reason'],'NSE_2026_PUBLISHED_HOLIDAY')
+
+    def test_boolean_reward_multiple_is_not_a_strategy_parameter(self):
+        with self.assertRaises(ValueError):
+            backtest_orb(day(full=True),reward_r=True)
+
 if __name__=='__main__':unittest.main()

@@ -3,7 +3,8 @@ import unittest
 from unittest.mock import patch
 
 from india_trader.core import DataError
-from india_trader.intraday_sources import fetch_preferred, parse_upstox_candles, upstox_bars
+from india_trader.intraday_sources import (_NoRedirect, _upstox_get, fetch_preferred,
+                                           parse_upstox_candles, upstox_bars)
 
 
 CANDLE = ['2026-10-29T09:15:00+05:30', 100, 101, 99, 100.5, 1000, 0]
@@ -18,6 +19,14 @@ class IntradaySourcesTests(unittest.TestCase):
     def test_upstox_rejects_wrong_shape(self):
         with self.assertRaises(DataError):
             parse_upstox_candles({'status': 'success', 'data': {'candles': [['bad']]}})
+        with self.assertRaisesRegex(DataError, 'object'):
+            parse_upstox_candles({'status': 'success', 'data': 'not-an-object'})
+
+    def test_read_only_token_does_not_follow_redirect_or_other_host(self):
+        with self.assertRaisesRegex(DataError, 'official HTTPS endpoint'):
+            _upstox_get('https://example.com/v3/historical-candle/redirect', 'test-token')
+        with self.assertRaisesRegex(DataError, 'redirect refused'):
+            _NoRedirect().redirect_request(None, None, 302, 'Moved', {}, 'https://other.example/')
 
     @patch('india_trader.intraday_sources._upstox_get')
     def test_upstox_merges_history_and_intraday(self, get):

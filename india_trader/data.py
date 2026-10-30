@@ -82,6 +82,17 @@ def fetch_bars(ticker: str, interval: str = "5m", range_: str = "5d") -> list[di
             dt = datetime.fromtimestamp(int(ts), IST)
         except (ValueError, TypeError, OSError, OverflowError) as exc:
             raise DataError("Provider supplied invalid Unix timestamp") from exc
+        if (dt.minute % 5 or dt.second or dt.microsecond) and i == len(stamps) - 1 and i > 0:
+            # Yahoo sometimes appends a current-price update after the aligned
+            # in-progress five-minute candle. It is not another 5m candle.
+            try:
+                previous = datetime.fromtimestamp(int(stamps[i - 1]), IST)
+            except (ValueError, TypeError, OSError, OverflowError) as exc:
+                raise DataError("Provider supplied invalid Unix timestamp") from exc
+            if (previous.minute % 5 == 0 and previous.second == 0 and
+                    previous.microsecond == 0 and
+                    0 < (dt - previous).total_seconds() < 300):
+                continue
         volume = q.get("volume")
         rows.append({"timestamp": dt.isoformat(), **{k:q[k][i] for k in ("open", "high", "low", "close")},
                      "volume": volume[i] if isinstance(volume, list) and i < len(volume) else None})

@@ -2,7 +2,7 @@
 
 An **independent, defensive Python implementation** inspired by the [MIT-licensed `day-trader-skill` by Jake Schincariol](https://github.com/Jakeschincariol/day-trader-skill). You do **not** need Claude. This archive **does not contain the upstream 11 Claude skills**, does not claim to be a complete port and is **not** a validated profitable strategy.
 
-**Safety:** paper-only; no broker order connector or autonomous trade execution. An optional locally entered Upstox Analytics Token is read-only market-data access. Do not use Yahoo quotes for live execution. No investment advice.
+**Safety:** paper-only; no live broker order connector or autonomous trade execution. The optional Upstox **sandbox-only** order handoff uses a separate sandbox token entered locally and cannot target a live host. An optional Upstox Analytics Token is read-only market-data access. Do not use Yahoo quotes for live execution. No investment advice.
 
 ## Getting started — Windows 10/11
 
@@ -24,7 +24,7 @@ You can give the app a ticker directly; you do **not** have to prepare candle fi
 
 ```powershell
 python -m india_trader orb RELIANCE --as-of 2026-10-29T10:30:00+05:30
-python -m india_trader orb 500325 --exchange BSE --as-of 2026-10-29T10:30:00+05:30
+python -m india_trader orb RELIANCE --exchange BSE --as-of 2026-10-29T10:30:00+05:30
 ```
 
 For a list of tickers, put one symbol per line in `watchlist.txt`, then run `python -m india_trader scan --watchlist watchlist.txt --as-of 2026-10-29T10:30:00+05:30`. The watchlist is limited to 10 symbols per run. Use CSV or JSON input when you want to analyze your own verified bars or work offline.
@@ -34,10 +34,14 @@ For a list of tickers, put one symbol per line in `watchlist.txt`, then run `pyt
 ```powershell
 python -m india_trader fetch RELIANCE --out trader\reliance.json
 python -m india_trader orb --json trader\reliance.json --out trader\reliance_orb.json
-python -m india_trader fetch 500325 --exchange BSE --out trader\bse.json
+python -m india_trader fetch RELIANCE --exchange BSE --out trader\bse.json
 ```
 
 The public Yahoo Finance chart endpoint is **unofficial**: intermittent HTTP errors, delays, data gaps, historical limits and rate limiting can occur. `fetch` only allows 5-minute bars with `--range 1d`, `5d` or `1mo`. The program refuses many invalid candles and does not silently fill missing trading bars. It does not verify prices against NSE/BSE. Validate symbols, exchange, freshness, lot type, calendar, and corporate actions separately; do not assume the latest session is today's session.
+
+For BSE, use Yahoo's verified trading symbol (for example, `RELIANCE.BO`). A numeric BSE scrip code such as `500325` is syntactically accepted but may return HTTP 404 from Yahoo; the adapter does not have a verified code-to-symbol directory and will not guess a mapping.
+
+Yahoo may append an off-grid, in-progress price update after its current aligned five-minute bar. The adapter discards that trailing update when it falls within the preceding five-minute interval; an irregular timestamp anywhere else still fails validation. Downstream ORB and entry checks use only completed aligned bars.
 
 The candle fetcher tries locally configured read-only Upstox first, then Yahoo's `query2` host and `query1` after a transport failure. The Yahoo hosts are **one provider**, not two independent data sources. Upstox needs a locally entered account token and is not live-tested in this installation. FYERS is not connected. NSE's official one- and five-minute snapshot feed is a subscription product. The app does not silently substitute a quote or a daily bar for a missing five-minute candle.
 
@@ -58,7 +62,7 @@ python -m india_trader backtest --csv your_verified_history.csv --out trader\rep
 python -m india_trader orb --csv your_verified_history.csv --date 2026-10-28 --as-of 2026-10-28T10:30:00+05:30
 ```
 
-The backtest only uses **complete 72-bar, gap-free sessions ending at 15:15 IST (conservative pre-auction cutoff)**. On a close above the opening range, it pretends to buy at the **next five-minute bar's OPEN**, not retrospectively at the breakout bar's close. If stop and target could both be hit in one candle, it counts the stop first. **Session cutoff:** Since a 2026 closing auction applies to certain stocks, the adapter uniformly stops continuous-bar analysis by **15:15 IST**. Non-auction stocks may continue through 15:30; this tool intentionally skips that segment. It does **not** simulate auction orders, matching or execution. **It assumes zero fees, zero slippage, 100% fill availability, no liquidity problem, no corporate actions and no verified instrument calendar.** Results are exploratory, not accurate real-world P&L, and not Monte Carlo forecasting.
+The backtest only uses **complete 72-bar, gap-free sessions ending at 15:15 IST (conservative pre-auction cutoff)**. On a close above the opening range, it pretends to buy at the **next five-minute bar's OPEN**, not retrospectively at the breakout bar's close. If stop and target could both be hit in one candle, it counts the stop first. **Session cutoff:** Since a 2026 closing auction applies to certain stocks, the adapter uniformly stops continuous-bar analysis by **15:15 IST**. Non-auction stocks may continue through 15:30; this tool intentionally skips that segment. It does **not** simulate auction orders, matching or execution. Published 2026 NSE EQ holidays are skipped, but special sessions, ad hoc closures, BSE-specific sessions, and other years are not verified. **It assumes zero fees, zero slippage, 100% fill availability, no liquidity problem and no corporate actions.** Results are exploratory, not accurate real-world P&L, and not Monte Carlo forecasting.
 
 ### Scanner
 
@@ -92,7 +96,7 @@ Default limit: **10 tickers per run**. This is **not** an NSE-wide or Nifty 500 
 python -m india_trader paper-cycle --watchlist watchlist.txt --tick 0.10 --out trader\paper_cycle.json
 ```
 
-The `--tick 0.10` value is only an example. Verify each instrument's tick size before using its plan. `--as-of` can pin a historical IST cutoff; without it, the command uses the current IST time. This is a single run, not an unattended scheduler. The unofficial Yahoo feed, missing market calendar, and unverified costs make it unsuitable for live order placement.
+The `--tick 0.10` value is only an example. Verify each instrument's tick size before using its plan. `--as-of` can pin a historical IST cutoff; without it, the command uses the current IST time. This is a single run, not an unattended scheduler. The unofficial Yahoo feed, partial calendar coverage, and unverified costs make it unsuitable for live order placement.
 
 For an initial paper example, double-click `RUN_PAPER_CYCLE_WINDOWS.bat`. It uses the illustrative `paper_watchlist.txt` (RELIANCE only), a hypothetical ₹100,000 balance and the same unverified tick/cost assumptions. It writes `trader/paper_cycle.json`; a `NO_PAPER_PLAN` result is expected whenever data checks block a plan.
 
@@ -103,7 +107,7 @@ python -m india_trader nse-bhavcopy --date 2026-10-28 --symbol RELIANCE
 python -m india_trader nse-live RELIANCE
 ```
 
-`nse-bhavcopy` reads NSE's final CM-UDiFF daily archive, validates the trade date and OHLCV, and selects NSE `EQ` shares. The report appears after the trading day; it cannot supply five-minute candles. `nse-live` checks normal weekday market hours first and returns `MARKET_CLOSED` without a quote outside them; the app does not yet account for holidays and special sessions. During normal hours it tries NSE's official CM Market Live MCP quote service, whose prices NSE says lag by about 1–3 minutes. If the service rejects its session or a quote is unavailable, the command returns `UNAVAILABLE` with no price. An after-hours direct probe on 29 October 2026 initialized but returned HTTP 404, “Session not found”, when the tool list was requested. An in-session quote has not yet been validated. Both sources are for informational paper research under [NSE's MCP terms](https://www.nseindia.com/nse-mcp); they do not enable broker orders. The five-minute ORB uses locally configured read-only Upstox candles, unofficial Yahoo fallback, or user-provided candles.
+`nse-bhavcopy` reads NSE's final CM-UDiFF daily archive, validates the trade date and OHLCV, and selects NSE `EQ` shares. The report appears after the trading day; it cannot supply five-minute candles. `nse-live` checks normal hours and the published 2026 NSE EQ holiday list first and returns `MARKET_CLOSED` without a quote outside those ordinary sessions; special sessions and ad hoc closures are not verified. During normal hours it tries NSE's official CM Market Live MCP quote service, whose prices NSE says lag by about 1–3 minutes. If the service rejects its session, returns no content, or a quote is unavailable, the command returns `UNAVAILABLE` with no price. During the 30 October 2026 session the MCP service initialized but subsequently returned HTTP 404; an in-session quote has **not** been validated. Both sources are for informational paper research under [NSE's MCP terms](https://www.nseindia.com/nse-mcp); they do not enable broker orders. The five-minute ORB uses locally configured read-only Upstox candles, unofficial Yahoo fallback, or user-provided candles.
 
 ### Marketwide daily scan
 
@@ -117,7 +121,7 @@ The installed app now tries an Upstox **read-only Analytics Token** first, if on
 
 ### Entry and exit handoff
 
-`entry` checks completed five-minute bars for an opening-range or explicit level close. It can enforce a trigger-bar volume multiple, reports the trigger time and age, and never places an order. `exit` accepts a saved triggered entry and computes an opening-range midpoint/low, percentage, explicit-price, or ATR stop plus an R-multiple or explicit-price target. A tick assumption is required. Example with the bundled synthetic bars:
+`entry` checks completed five-minute bars for an opening-range or explicit level close. It can enforce a trigger-bar volume multiple, reports the trigger time and age, and never places an order. An old trigger now returns `STALE_SIGNAL`; a level entry with old candles returns `STALE_DATA`. `exit` accepts a saved fresh triggered entry and computes an opening-range midpoint/low, percentage, explicit-price, or ATR stop plus an R-multiple or explicit-price target. A tick assumption is required and checked for a sensible range. Example with the bundled synthetic bars:
 
 ```powershell
 python -m india_trader entry --csv examples/SYNTHETIC_TEST_BARS.csv --as-of 2026-10-28T09:35:00+05:30 --out trader/entry.json
@@ -128,13 +132,36 @@ The example produced a hypothetical entry ₹103, stop ₹100, and target ₹109
 
 ### Paper budget, risk, and ticket
 
-`budget` sizes a proposed whole-share, long-cash paper position from a saved exit plan using capital, per-trade loss, allocation, cash buffer, slippage, and fee assumptions. `risk` checks the exact proposal fingerprint, IST entry window, freshness, daily loss, trade count, duplicate symbol, and paper cash. `paper-ticket` shows the reviewed ticket; `--approve` prompts for an exact `YES` and records approval only after a fresh same-day risk review. It never sends an order or assumes a fill. An offline synthetic end-to-end check produced a 140-share proposal with ₹498.42 planned loss under a ₹500 example limit, and an `AWAITING_APPROVAL` ticket. This is not a real RELIANCE price or recommendation.
+`budget` sizes a proposed whole-share, long-cash paper position from a saved exit plan using capital, per-trade loss, allocation, cash buffer, slippage, and fee assumptions. `risk` checks the exact proposal fingerprint, recomputes notional and loss independently from quantity and prices, verifies the allocation and cash buffer, and checks the IST entry window, freshness, daily loss, trade count, duplicate symbol, paper cash, and published 2026 NSE EQ holidays. Dates in other years fail closed for NSE entries; BSE entries conservatively block on NSE closed dates, but a BSE-specific calendar is not verified. `paper-ticket` shows the reviewed ticket; `--approve` prompts for an exact `YES` and records approval only after a fresh same-day risk review. It never sends an order or assumes a fill. An offline synthetic end-to-end check produced a 140-share proposal with ₹498.42 planned loss under a ₹500 example limit, and an `AWAITING_APPROVAL` ticket. This is not a real RELIANCE price or recommendation.
 
 ```powershell
 python -m india_trader budget --plan trader/exit.json --out trader/order.json
 python -m india_trader risk --order trader/order.json --out trader/risk.json
 python -m india_trader paper-ticket --order trader/order.json --risk trader/risk.json --out trader/ticket.json
 ```
+
+### Local paper broker (feature 7)
+
+The paper broker keeps an on-disk record of approved proposals, manual simulated fills, cash, open shares, exits, and an event log. It locks the ledger across CLI transactions and checks order IDs, fill totals and positions on load and save. Prepare a fresh `budget` order and `risk` review as above, then run:
+
+```powershell
+python -m india_trader paper-broker init --cash 100000
+python -m india_trader paper-broker submit --order trader/order.json --risk trader/risk.json
+python -m india_trader paper-broker show
+python -m india_trader paper-broker fill --id 1 --qty 2 --price 103
+python -m india_trader paper-broker close --ticker RELIANCE.NS --qty 2 --price 109 --reason TARGET
+python -m india_trader paper-broker log
+```
+
+`submit` displays the exact proposal and requires typing `YES`; its saved risk review must be fresh, and the program repeats the risk check against the current paper ledger. Approval leaves the cash and positions untouched. `fill` and `close` each require typing `SIMULATE` and a price you enter yourself. These are hypothetical fills, **not verified market prices or actual executions**. To cancel a remaining unfilled entry, run `python -m india_trader paper-broker cancel --id 1`. Cancel an unfilled entry remainder before closing the paper shares; if an exit ticket has been approved, supply its exact `--exit-id`. The ledger defaults to `trader/paper_broker.json`; use `--ledger PATH` on every command to keep a separate scenario. An existing ledger with activity cannot be reset by `init`.
+
+The complete local workflow also supports `decline --order trader/order.json` (records a NO), `flatten --ticker RELIANCE.NS` (creates a sell-to-close ticket for held paper shares), `approve-exit --id 2` (requires YES within five minutes), and `close --ticker RELIANCE.NS --qty 2 --price 109 --exit-id 2 --reason FLAT_BY` (records a manually entered simulated sell). `show` renders each ticket with its fingerprint and current status; `log` shows decisions and fills.
+
+For an **optional Upstox sandbox order** (never a live order), create a sandbox app and token through Upstox Developer Apps. Put the token only in the local process environment as `UPSTOX_SANDBOX_TOKEN`; do not enter it in chat, a file in this repo, or the command line. Download the current NSE or BSE BOD instrument **JSON** file from Upstox and save it locally outside this repo. After `submit` and its YES, run `python -m india_trader paper-broker sandbox-place --id 1 --instrument-key 'NSE_EQ|INE002A01018' --instrument-master C:\path\to\NSE.json.gz` using your **verified** key (quote it in PowerShell because it contains `|`). The shown key is illustrative; do not assume it belongs to the named ticker. The program checks the file for the matching symbol, exchange, EQ series, lot size and quantity before displaying the exact sandbox payload and requiring a second `ALLOW ONCE`. Refresh the BOD file for the intended trading day. It sends one request to the fixed `https://api-sandbox.upstox.com/v3/order/place` endpoint. An accepted sandbox order ID is **not a fill** and does not update paper cash or shares. Sandbox order placement has not been account-tested here.
+
+To request cancellation of an accepted sandbox order, use `paper-broker sandbox-cancel --id 1` and type `ALLOW ONCE` again. A network timeout marks the outcome unknown and prevents automatic retry. After independently checking the sandbox orderbook, use `paper-broker sandbox-reconcile --id 1 --outcome accepted --broker-id YOUR_SANDBOX_ORDER_ID`, or `--outcome canceled` / `--outcome rejected`, then type `RECONCILE`. If the process stopped after persisting an attempt, this same manual reconciliation can resolve its attempted state; it never retries the network call. A cancellation acknowledgement is kept separate from a verified final state. Neither sandbox placement nor cancellation proves a fill. The sandbox token is never saved in the ledger.
+
+The simulator checks whole shares, available paper cash, approved price and loss assumptions, duplicate submissions, and oversells. It stores a digest of approved ticket terms and refuses changed tickets at fill or sandbox handoff; this detects accidental edits but is not a cryptographic signature against someone controlling the ledger file. It has no live broker integration, automatic fill detection, real exchange-backed protective bracket, actual fees and taxes, complete exchange calendar, or continuously running flat-by rule. The terminal's `--as-of` is for deterministic offline scenarios; without it the command uses current IST time. Do not treat its simulated P&L as a trading result. The upstream Alpaca broker supports US securities; its bracket and live broker behavior do not work for Indian stocks in this adapter.
 
 ## Using ChatGPT (without Claude)
 
@@ -148,7 +175,7 @@ Open the extracted folder in Codex; `AGENTS.md` is the repo policy file and `.ag
 
 | Feature | Current development state |
 | --- | --- |
-| NSE/BSE Yahoo-format symbol mapping | Implemented; provider availability unverified |
+| NSE/BSE Yahoo-format suffix normalization | Implemented; numeric BSE scrip codes may not resolve on Yahoo |
 | Offline 5-minute CSV / JSON validation | Implemented and tested |
 | Completed 15-minute ORB + fail-closed gaps/staleness | Implemented and tested |
 | Hypothetical INR risk/position/target planner | Implemented and tested |
@@ -157,12 +184,14 @@ Open the extracted folder in Codex; `AGENTS.md` is the repo policy file and `.ag
 | Codex Agent Skill / ChatGPT workflow documentation | Included |
 | NSE EQ daily universe / BSE universe | NSE EQ list and official daily marketwide scan implemented; BSE not implemented |
 | Independent five-minute candle sources | Read-only Upstox adapter prepared but not account-tested; unofficial Yahoo fallback tested |
-| Entry, exit, budget, risk, paper ticket | Basic handoff implemented and tested offline; no background watch or simulated fill ledger |
+| Entry, exit, budget, risk, paper ticket | Basic handoff implemented and tested offline; no background watch |
+| Local paper broker | Ticket approval/decline, simulated fills, exit ticket, position ledger, result log and optional Upstox sandbox-only place/cancel handoff; not account-tested |
 | Real-time exchange-approved live market feed | **Not implemented** |
 | Indian corporate filings/news/financial statements NLP | **Not implemented** |
-| Marketwide sentiment/realtime alerts | **Not implemented** |
-| Indian exchange holiday + Muhurat + special-auction calendar | **Not implemented** |
-| Broker API, order placement, broker fees, tax engine | **Not implemented (safety boundary)** |
+| Marketwide sentiment | **Not implemented** |
+| Price, stop, target and time alerts | **Not implemented** |
+| Indian exchange holiday + Muhurat + special-auction calendar | Partial: published 2026 NSE EQ closures block normal NSE entries and are skipped in replay; special sessions, ad hoc closures, BSE-specific dates and future years unverified |
+| Live broker API, real order placement, broker fees, tax engine | **Not implemented**; Upstox sandbox-only order handoff is separate |
 | Original 11 Claude skills, full parity / Monte Carlo 10,000 | **Not implemented** |
 | Graphical UI | **Not implemented** |
 
@@ -170,6 +199,6 @@ Open the extracted folder in Codex; `AGENTS.md` is the repo policy file and `.ag
 
 ## QA and provenance
 
-See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. This later working state passed 109 offline tests on Windows Python 3.11. NSE daily Bhavcopy and Yahoo paper-cycle smoke checks ran; Upstox, CM Market Live during market hours, exchange holidays, actual order execution and profitability have **not** been validated. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
+See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. The 30 October audit passes 146 offline tests on Linux Python 3.12, compiles the package, and completes the synthetic CLI flow from entry through paper close. A prior 109-test working state passed on Windows Python 3.11; the new broker locking and sandbox changes have **not** been rerun on Windows. NSE daily Bhavcopy and Yahoo five-minute paper research were sampled during the 30 October market session; the NSE CM Market Live quote service returned HTTP 404. No account-backed Upstox candle or sandbox transaction, real execution, fee calculation, calendar change, or profitability was validated. The supplied tests use Python standard-library `unittest`. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
 
 Sources: [NSE tick-size circular](https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf), [2026 closing-auction timing reference](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/what-are-the-market-timings), [NSE market timings](https://www.nseindia.com/static/market-data/market-timings), [OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills), [upstream project](https://github.com/Jakeschincariol/day-trader-skill).

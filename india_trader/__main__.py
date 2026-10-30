@@ -1,8 +1,10 @@
 """python -m india_trader --help"""
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from .core import DataError, IST, orb_signal, plan, read_csv, read_json_bars, save_json, symbol
 from .data import fetch_bars
 from .backtest import backtest_orb
@@ -14,6 +16,12 @@ from .daily_scan import scan_nse_daily
 from .intraday_sources import fetch_preferred
 from .trade_workflow import entry_check, exit_plan
 from .paper_orders import size_paper_order, risk_review, paper_ticket
+from .paper_broker import (load_ledger, save_ledger, ledger_lock, submit, decline, cancel,
+                           fill_entry, close_position, propose_flatten,
+                           approve_flatten, begin_sandbox_send, record_sandbox_result,
+                           begin_sandbox_cancel, record_sandbox_cancel,
+                           deny_sandbox_permission, reconcile_sandbox, ticket_view)
+from .broker_sandbox import order_payload, place_sandbox, cancel_sandbox, verify_instrument
 
 
 def attach_bars(p, symbol_optional=False):
@@ -140,6 +148,25 @@ def main(argv=None):
     pt.add_argument("--risk", required=True)
     pt.add_argument("--approve", action="store_true", help="Prompt for explicit YES; records approval only")
     pt.add_argument("--out")
+    br = sub.add_parser("paper-broker", help="Local paper order, simulated fill and position ledger")
+    br.add_argument("action", choices=("init", "show", "submit", "decline", "fill", "close",
+                                       "cancel", "flatten", "approve-exit", "sandbox-place",
+                                       "sandbox-cancel", "sandbox-reconcile", "log"))
+    br.add_argument("--ledger", default="trader/paper_broker.json")
+    br.add_argument("--cash", default="100000", help="Initial paper cash, for init only")
+    br.add_argument("--order", help="Saved budget order JSON, for submit")
+    br.add_argument("--risk", help="Saved risk review JSON, for submit")
+    br.add_argument("--id", type=int, help="Paper order ID, for fill or cancel")
+    br.add_argument("--exit-id", type=int, help="Approved exit ticket ID, for close")
+    br.add_argument("--ticker", help="Open paper position, for close")
+    br.add_argument("--qty", type=int, help="Whole simulated shares, for fill or close")
+    br.add_argument("--price", help="User-entered simulated price, for fill or close")
+    br.add_argument("--reason", choices=("MANUAL", "STOP", "TARGET", "FLAT_BY"), default="MANUAL")
+    br.add_argument("--instrument-key", help="Verified NSE_EQ/BSE_EQ ISIN key for sandbox-place")
+    br.add_argument("--instrument-master", help="Local Upstox BOD JSON or .gz file for key/ticker cross-check")
+    br.add_argument("--outcome", choices=("accepted", "canceled", "rejected"), help="Verified sandbox orderbook result")
+    br.add_argument("--broker-id", help="Verified sandbox order ID for reconciliation")
+    br.add_argument("--as-of", help="Offset-aware simulated IST clock; default now")
     args = p.parse_args(argv)
     try:
         if args.cmd == "fetch":
@@ -215,6 +242,133 @@ def main(argv=None):
                 review = json.load(stream)
             approved = args.approve and input("Type YES to approve this exact PAPER ticket (no fill): ").strip() == "YES"
             result = paper_ticket(order, review, approved)
+        elif args.cmd == "paper-broker":
+            with ledger_lock(args.ledger):
+                if args.action == "init":
+                    ledger = load_ledger(args.ledger, args.cash)
+                    if ledger["orders"] or ledger["events"] or ledger["positions"]:
+                        raise ValueError("Paper ledger already contains activity; refusing to reset")
+                    if not Path(args.ledger).exists():
+                        save_ledger(args.ledger, ledger)
+                else:
+                    ledger = load_ledger(args.ledger)
+                    if args.action == "submit":
+                        if not args.order or not args.risk:
+                            raise ValueError("Submit needs --order and --risk")
+                        with open(args.order, encoding="utf-8") as stream:
+                            order = json.load(stream)
+                        with open(args.risk, encoding="utf-8") as stream:
+                            review = json.load(stream)
+                        print(f"PAPER BUY {order.get('quantity')} {order.get('ticker')}, reference ₹{order.get('entry_reference')}, stop ₹{order.get('stop')}, target ₹{order.get('target')}; fingerprint {order.get('fingerprint')}", file=sys.stderr)
+                        if input("Type YES for this exact paper order (no market order): ").strip() != "YES":
+                            raise ValueError("Paper order not approved")
+                        ledger = submit(ledger, order, review, args.as_of)
+                    elif args.action == "decline":
+                        if not args.order:
+                            raise ValueError("Decline needs --order")
+                        with open(args.order, encoding="utf-8") as stream:
+                            order = json.load(stream)
+                        if input("Type NO to decline this exact paper proposal: ").strip() != "NO":
+                            raise ValueError("Paper decline not recorded")
+                        ledger = decline(ledger, order, "NO", args.as_of)
+                    elif args.action == "flatten":
+                        if not args.ticker:
+                            raise ValueError("Flatten needs --ticker")
+                        ledger = propose_flatten(ledger, args.ticker, args.as_of, args.qty)
+                    elif args.action == "approve-exit":
+                        if args.id is None:
+                            raise ValueError("Approve-exit needs --id")
+                        row = next((o for o in ledger["orders"] if o["id"] == args.id), None)
+                        if not row:
+                            raise ValueError("Unknown paper exit ticket")
+                        print(f"PAPER SELL {row['quantity']} {row['ticker']}; fingerprint {row['fingerprint']}", file=sys.stderr)
+                        if input("Type YES for this exact sell-to-close ticket: ").strip() != "YES":
+                            raise ValueError("Sell-to-close ticket not approved")
+                        ledger = approve_flatten(ledger, args.id, args.as_of)
+                    elif args.action == "sandbox-place":
+                        if args.id is None or not args.instrument_key or not args.instrument_master:
+                            raise ValueError("Sandbox-place needs --id, --instrument-key and --instrument-master")
+                        row = next((o for o in ledger["orders"] if o["id"] == args.id), None)
+                        if not row:
+                            raise ValueError("Unknown paper order ID")
+                        payload = order_payload(row, args.instrument_key)
+                        verified = verify_instrument(args.instrument_master, row["ticker"],
+                                                     args.instrument_key, row["quantity"])
+                        token = os.environ.get("UPSTOX_SANDBOX_TOKEN")
+                        if not token:
+                            raise ValueError("Set UPSTOX_SANDBOX_TOKEN in the local process environment")
+                        print("UPSTOX SANDBOX ONLY: " + json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+                        print("Instrument cross-check: " + json.dumps(verified, ensure_ascii=False), file=sys.stderr)
+                        if input("Type ALLOW ONCE to send this one order to the sandbox: ").strip() != "ALLOW ONCE":
+                            ledger = deny_sandbox_permission(ledger, args.id, args.as_of)
+                            save_ledger(args.ledger, ledger)
+                            raise ValueError("Sandbox permission denied")
+                        ledger = begin_sandbox_send(ledger, args.id, args.instrument_key, args.as_of)
+                        save_ledger(args.ledger, ledger)  # persist uncertainty before any network request
+                        try:
+                            sandbox_id = place_sandbox(payload, token)
+                        except ValueError:
+                            ledger = record_sandbox_result(ledger, args.id, None, args.as_of)
+                            save_ledger(args.ledger, ledger)
+                            raise
+                        ledger = record_sandbox_result(ledger, args.id, sandbox_id, args.as_of)
+                    elif args.action == "sandbox-cancel":
+                        if args.id is None:
+                            raise ValueError("Sandbox-cancel needs --id")
+                        row = next((o for o in ledger["orders"] if o["id"] == args.id), None)
+                        if not row or not row.get("sandbox_order_id"):
+                            raise ValueError("No confirmed sandbox order ID to cancel")
+                        token = os.environ.get("UPSTOX_SANDBOX_TOKEN")
+                        if not token:
+                            raise ValueError("Set UPSTOX_SANDBOX_TOKEN in the local process environment")
+                        print(f"UPSTOX SANDBOX cancellation for order {row['sandbox_order_id']}", file=sys.stderr)
+                        if input("Type ALLOW ONCE to cancel this one sandbox order: ").strip() != "ALLOW ONCE":
+                            raise ValueError("Sandbox cancellation permission denied")
+                        ledger = begin_sandbox_cancel(ledger, args.id, args.as_of)
+                        save_ledger(args.ledger, ledger)
+                        try:
+                            cancel_sandbox(row["sandbox_order_id"], token)
+                        except ValueError:
+                            ledger = record_sandbox_cancel(ledger, args.id, False, args.as_of)
+                            save_ledger(args.ledger, ledger)
+                            raise
+                        ledger = record_sandbox_cancel(ledger, args.id, True, args.as_of)
+                    elif args.action == "sandbox-reconcile":
+                        if args.id is None or args.outcome is None:
+                            raise ValueError("Sandbox-reconcile needs --id and --outcome")
+                        print(f"Record independently verified sandbox result {args.outcome} for ticket {args.id}", file=sys.stderr)
+                        if input("Type RECONCILE after checking the sandbox orderbook: ").strip() != "RECONCILE":
+                            raise ValueError("Sandbox reconciliation not confirmed")
+                        ledger = reconcile_sandbox(ledger, args.id, args.outcome, args.broker_id, args.as_of)
+                    elif args.action in ("fill", "close"):
+                        if args.qty is None or args.price is None:
+                            raise ValueError("Simulated fill needs --qty and --price")
+                        if args.action == "fill":
+                            if args.id is None:
+                                raise ValueError("Fill needs --id")
+                            label = f"BUY {args.qty} shares for paper order {args.id} at ₹{args.price}"
+                        else:
+                            if not args.ticker:
+                                raise ValueError("Close needs --ticker")
+                            label = f"SELL {args.qty} {args.ticker} paper shares at ₹{args.price}"
+                        print(label + " — price is user-supplied, not a market fill", file=sys.stderr)
+                        if input("Type SIMULATE to record this hypothetical fill: ").strip() != "SIMULATE":
+                            raise ValueError("Simulated fill not confirmed")
+                        ledger = (fill_entry(ledger, args.id, args.qty, args.price, args.as_of)
+                                  if args.action == "fill" else
+                                  close_position(ledger, args.ticker, args.qty, args.price, args.as_of, args.reason, args.exit_id))
+                    elif args.action == "cancel":
+                        if args.id is None:
+                            raise ValueError("Cancel needs --id")
+                        ledger = cancel(ledger, args.id, args.as_of)
+                    if args.action in ("submit", "decline", "fill", "close", "cancel", "flatten", "approve-exit", "sandbox-place", "sandbox-cancel", "sandbox-reconcile"):
+                        save_ledger(args.ledger, ledger)
+                if args.action == "log":
+                    result = {"mode": "PAPER_ONLY", "events": ledger["events"], "orders_possible": False}
+                elif args.action == "show":
+                    result = ticket_view(ledger)
+                else:
+                    result = ledger
         else:
             result = {"status":"OK", "python":sys.version.split()[0],
                       "timezone":"UTC+05:30 fixed IST", "orders_possible":False,

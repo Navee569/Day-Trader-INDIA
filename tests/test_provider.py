@@ -29,6 +29,19 @@ class TestYahooProvider(unittest.TestCase):
         bars=self.run_payload(good_payload())
         self.assertEqual(len(bars),2)
         self.assertEqual(bars[0]['timestamp'],'2026-10-28T09:15:00+05:30')
+    def test_trailing_in_progress_quote_update_is_not_a_five_minute_bar(self):
+        p=good_payload(); r=p['chart']['result'][0]
+        r['timestamp'].append(r['timestamp'][-1]+86)
+        q=r['indicators']['quote'][0]
+        for key in ('open','high','low','close','volume'): q[key].append(q[key][-1])
+        self.assertEqual(len(self.run_payload(p)),2)
+
+    def test_interior_irregular_timestamp_still_fails(self):
+        p=good_payload(); r=p['chart']['result'][0]
+        r['timestamp'].insert(1,r['timestamp'][0]+86)
+        q=r['indicators']['quote'][0]
+        for key in ('open','high','low','close','volume'): q[key].insert(1,q[key][0])
+        with self.assertRaisesRegex(DataError,'aligned'): self.run_payload(p)
     def test_currency_mismatch(self):
         p=good_payload();p['chart']['result'][0]['meta']['currency']='USD'
         with self.assertRaisesRegex(DataError,'currency'):self.run_payload(p)

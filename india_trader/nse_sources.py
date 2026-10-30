@@ -12,6 +12,7 @@ import zipfile
 from datetime import date, datetime, time
 
 from .core import IST
+from .market_calendar import NSE_2026_CLOSED
 
 BHAVCOPY = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{day}_F_0000.csv.zip"
 CM_LIVE = "https://mcp.nseindia.in/cmmkt/mcp"
@@ -96,11 +97,16 @@ def cm_live_quote(ticker: str, now: datetime | None = None) -> dict:
     if clock.tzinfo is None:
         raise ValueError("Market clock must include a timezone")
     local = clock.astimezone(IST)
-    if local.weekday() >= 5 or not (time(9, 15) <= local.time() < time(15, 30)):
+    if (local.weekday() >= 5 or local.date() in NSE_2026_CLOSED or
+            not (time(9, 15) <= local.time() < time(15, 30))):
         return {"status": "MARKET_CLOSED", "source": "NSE CM Market Live MCP",
                 "mode": "RESEARCH_ONLY", "symbol": ticker.upper(),
                 "checked_at": local.isoformat(), "quote": None,
-                "note": "Normal weekday hours only; exchange holidays and special sessions are not checked"}
+                "note": "2026 published NSE EQ holidays checked; special sessions and ad hoc closures are not checked"}
+    if local.year != 2026:
+        return {"status": "UNAVAILABLE", "source": "NSE CM Market Live MCP",
+                "mode": "RESEARCH_ONLY", "symbol": ticker.upper(),
+                "reason": "Exchange calendar year unverified", "quote": None}
     try:
         init, session = _mcp_post("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
                                                 "clientInfo": {"name": "india-day-trader-paper", "version": "0.2.1"}})
@@ -118,6 +124,8 @@ def cm_live_quote(ticker: str, now: datetime | None = None) -> dict:
                 result, _ = _mcp_post("tools/call", {"name": tool["name"], "arguments": {key: ticker.upper()}}, session)
                 if "error" in result or result.get("result", {}).get("isError"):
                     raise ValueError("NSE CM Market Live quote tool returned an error")
+                if not result.get("result", {}).get("content"):
+                    raise ValueError("NSE CM Market Live quote tool returned no content")
                 return {"status": "OK", "source": "NSE CM Market Live MCP", "mode": "RESEARCH_ONLY",
                         "delay_note": "NSE says prices are about 1-3 minutes behind real time",
                         "symbol": ticker.upper(), "fetched_at": datetime.now(IST).isoformat(),
