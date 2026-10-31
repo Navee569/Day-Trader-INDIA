@@ -126,7 +126,7 @@ def validate(rule):
     return rule
 
 
-def from_plan(plan):
+def from_plan(plan, flat_override=None):
     if not isinstance(plan, dict) or plan.get("mode") != "PAPER_PLAN_ONLY" or plan.get("status") != "PLANNED":
         raise AlertError("a saved paper exit plan is required")
     sym = ticker(plan.get("ticker") or plan.get("symbol"))
@@ -135,7 +135,7 @@ def from_plan(plan):
     target = _number(plan.get("target"), "plan target")
     if stop >= target:
         raise AlertError("paper plan stop must be below target")
-    flat = str(plan.get("flat_by_ist") or plan.get("flat_by") or "15:10")
+    flat = str(plan.get("flat_by_ist") or plan.get("flat_by") or flat_override or "15:10")
     if _hhmm(flat) > FLAT_BY:
         raise AlertError("plan flat-by exceeds 15:10 IST")
     prefix = sym.lower().replace(".", "-")
@@ -340,6 +340,7 @@ def main(argv=None):
     p.add_argument("--prices", default="trader/prices.json")
     p.add_argument("--plan", default="trader/plan.json")
     p.add_argument("--portfolio", default="trader/portfolio.json")
+    p.add_argument("--json", action="store_true", help="structured output")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("clock", help="NSE normal-session status and next opening")
     add = sub.add_parser("add", help="add a paper alert rule, or three rules from the exit plan")
@@ -350,6 +351,8 @@ def main(argv=None):
     group.add_argument("--opening-bell", action="store_true")
     group.add_argument("--from-plan", action="store_true")
     add.add_argument("--ticker")
+    add.add_argument("--symbol", dest="ticker", help="alias for --ticker")
+    add.add_argument("--config", default="trader/config.json", help="fallback flat_by for --from-plan")
     add.add_argument("--id")
     add.add_argument("--label")
     add.add_argument("--date")
@@ -360,18 +363,28 @@ def main(argv=None):
     add.add_argument("--note")
     check = sub.add_parser("check", help="check rules once using dated quote data")
     check.add_argument("--offline", help="directory of yahoo-SYMBOL.json saved chart responses")
+    check.add_argument("--source", choices=("yahoo", "saved"), default="yahoo")
+    check.add_argument("--prices-out", help="write fetched dated quotes here")
     check.add_argument("--saved", action="store_true", help="read --prices only, no network")
     check.add_argument("--no-write", action="store_true")
     quote = sub.add_parser("quote", help="get unofficial Yahoo INR quotes")
     quote.add_argument("tickers", nargs="*")
     quote.add_argument("--holdings", action="store_true")
     quote.add_argument("--offline", help="directory of yahoo-SYMBOL.json saved chart responses")
-    quote.add_argument("--write", action="store_true", help="merge dated quotes into --prices")
+    quote.add_argument("--source", choices=("yahoo", "saved"), default="yahoo")
+    quote.add_argument("--write", nargs="?", const="", metavar="PATH", help="merge dated quotes into --prices or PATH")
     sub.add_parser("list", help="show alert rules and once-only state")
     reset = sub.add_parser("reset", help="rearm one rule")
     reset.add_argument("id")
+    for command_parser in (sub.choices.values()):
+        command_parser.add_argument("--json", dest="command_json", action="store_true",
+                                    help="structured output")
+        command_parser.add_argument("--now", dest="command_now", help="IST replay clock")
     a = p.parse_args(argv)
     try:
+        if a.command_now is not None:
+            a.now = a.command_now
+        a.json = a.json or a.command_json
         now = clock(a.now)
         rc = 0
         if a.command == "clock":
@@ -380,7 +393,8 @@ def main(argv=None):
         elif a.command == "add":
             doc = _rules(a.rules)
             if a.from_plan:
-                new = from_plan(_read(a.plan))
+                cfg = _read(a.config, {})
+                new = from_plan(_read(a.plan), cfg.get("flat_by"))
                 ids = {r["id"] for r in new}
                 doc["rules"] = [r for r in doc["rules"] if r["id"] not in ids] + new
                 state = _state(a.state)
@@ -434,13 +448,19 @@ def main(argv=None):
             syms = list(dict.fromkeys(syms))
             if not syms:
                 raise AlertError("quote needs tickers or --holdings")
-            quotes, errors = quotes_for(syms, a.offline)
+            if a.source == "saved":
+                stored = read_quotes(a.prices)
+                quotes, errors = {s: stored[s] for s in syms if s in stored}, [
+                    {"ticker": s, "error": "no saved dated quote"} for s in syms if s not in stored]
+            else:
+                quotes, errors = quotes_for(syms, a.offline)
             for q in quotes.values():
                 age = (now - _timestamp(q["time"])).total_seconds() / 60
                 q["age_minutes"] = round(age, 1)
                 q["fresh_for_alert"] = 0 <= age <= QUOTE_MAX_AGE / 60
-            if a.write and quotes:
-                _write(a.prices, prices_file(quotes, _read(a.prices), now))
+            if a.write is not None and quotes:
+                destination = a.write or a.prices
+                _write(destination, prices_file(quotes, _read(destination), now))
             result = {"quotes": quotes, "errors": errors, "mode": "PAPER_ONLY",
                       "note": "Unofficial delayed INR quotes; no execution or guaranteed alert delivery"}
             rc = 0 if quotes else 1
@@ -450,7 +470,7 @@ def main(argv=None):
                 raise AlertError("no alert rules; use alerts add")
             syms = list(dict.fromkeys(r["ticker"] for r in rules if r["type"] in PRICE_TYPES and
                      (not r.get("date") or r["date"] == now.date().isoformat())))
-            if a.saved:
+            if a.saved or a.source == "saved":
                 quotes, errors = read_quotes(a.prices), []
             elif not market_clock(now)["trading_day"]:
                 quotes, errors = {}, []
@@ -459,13 +479,48 @@ def main(argv=None):
             rings, state, notes = evaluate(rules, quotes, _state(a.state), now)
             if not a.no_write:
                 _write(a.state, state)
-                if quotes and not a.saved:
-                    _write(a.prices, prices_file(quotes, _read(a.prices), now))
+                if quotes and not (a.saved or a.source == "saved"):
+                    destination = a.prices_out or a.prices
+                    _write(destination, prices_file(quotes, _read(destination), now))
             result = {"market": market_clock(now), "rings": rings, "notes": notes,
                       "quote_errors": errors, "quotes": quotes, "mode": "PAPER_ONLY",
                       "orders_possible": False, "notification_delivery": "CLI_ONLY"}
             rc = 0 if rings else 1
-        print(json.dumps(result, indent=2, allow_nan=False))
+        if a.json:
+            print(json.dumps(result, indent=2, allow_nan=False))
+        elif a.command == "clock":
+            print(f"NSE {'OPEN' if result['session_open'] else 'closed'}: {result['time_ist']} ({result['reason']}).")
+            if result.get("next_open_ist"):
+                print(f"Next normal open: {result['next_open_ist']}.")
+            print(result["calendar_note"])
+        elif a.command == "quote":
+            for sym, q in result["quotes"].items():
+                print(f"{sym} INR {q['price']:.2f} at {q['time']} [{q['source']}]; fresh_for_alert={q['fresh_for_alert']}")
+            for error in result["errors"]:
+                print(f"error: {error['ticker']}: {error['error']}")
+            print("Quotes are informational and may be delayed; no order is placed.")
+        elif a.command == "check":
+            market = result["market"]
+            print(f"NSE {'OPEN' if market['session_open'] else 'closed'}: {market['time_ist']} ({market['reason']}).")
+            for ring in result["rings"]:
+                print("ALERT " + ring["message"])
+            if not result["rings"]:
+                print("No alert rang.")
+            for note in result["notes"]:
+                print("note: " + note)
+            for error in result["quote_errors"]:
+                print(f"error: {error['ticker']}: {error['error']}")
+            print("Alerts are information only; paper exits require a separate broker record.")
+        elif a.command == "list":
+            for rule in result["rules"]:
+                print(f"{rule['id']}: {json.dumps(rule, allow_nan=False)}")
+            if not result["rules"]:
+                print("No alert rules.")
+        elif a.command == "add":
+            for rule in result["added"]:
+                print(f"Added {rule['id']}: {json.dumps(rule, allow_nan=False)}")
+        else:
+            print(f"Re-armed {result['reset']}.")
         return rc
     except (AlertError, BudgetError, ScanError, OSError, ValueError, TypeError, KeyError, StopIteration) as exc:
         print("alerts: " + str(exc), file=sys.stderr)

@@ -58,18 +58,56 @@ def limits(raw):
     return c
 
 
-def _portfolio(doc, budget):
+def _portfolio(doc, budget, prices=None, now=None):
     if doc is None:
         return budget, {}, budget, "assumed paper budget"
     cash = amount(doc.get("cash_inr", doc.get("cash")), "portfolio cash", zero=True)
     holdings = {}
+    valued = []
+    complete_basis = True
     for item in doc.get("positions", []):
         if not isinstance(item, dict):
             raise RiskError("portfolio positions must be objects")
         sym = ticker(item.get("ticker") or item.get("symbol"))
-        holdings[sym] = holdings.get(sym, 0) + _count(item.get("quantity", item.get("shares")), "holding quantity")
-    equity = amount(doc.get("equity_inr", doc.get("equity", budget)), "paper account equity")
-    return cash, holdings, equity, "paper portfolio"
+        qty = _count(item.get("quantity", item.get("shares")), "holding quantity")
+        holdings[sym] = holdings.get(sym, 0) + qty
+        quote = _price_record(prices, sym, now)[0] if prices is not None and now is not None else None
+        basis = item.get("average_cost_inr")
+        if quote is not None:
+            valued.append(qty * quote)
+        elif basis is not None:
+            valued.append(qty * amount(basis, "holding average cost"))
+        else:
+            complete_basis = False
+    if doc.get("positions") and complete_basis:
+        equity = cash + sum(valued, Decimal(0))
+        source = "paper portfolio valued at fresh quotes where available, otherwise average cost"
+    else:
+        equity = amount(doc.get("equity_inr", doc.get("equity", budget)), "paper account equity")
+        source = "paper portfolio stored equity (quotes/cost basis incomplete)"
+    return cash, holdings, equity, source
+
+
+def _day_state(state, now):
+    """Reconcile same-day counters with the append-only simulated-fill log."""
+    today = now.date().isoformat()
+    events = state.get("orders", [])
+    if not isinstance(events, list):
+        raise RiskError("broker order log must be a list")
+    fills = [x for x in events if isinstance(x, dict) and x.get("date") == today
+             and x.get("status") == "simulated_fill"]
+    keys = {(x.get("fingerprint"), x.get("side")) for x in fills}
+    entries = {(x.get("fingerprint"), x.get("ticker")) for x in fills if x.get("kind") == "entry"}
+    loss = sum((amount(x.get("max_loss_inr", 0), "logged max loss", zero=True)
+                for x in fills if x.get("kind") == "entry"), Decimal(0))
+    current = state if state.get("date") in (None, today) else {}
+    return {
+        "daily_planned_loss_inr": max(amount(current.get("daily_planned_loss_inr", 0), "daily planned loss", zero=True), loss),
+        "trades_today": max(_count(current.get("trades_today", 0), "trades_today"), len(entries)),
+        "orders_today": max(_count(current.get("orders_today", 0), "orders_today"), len(keys)),
+        "traded_symbols_today": sorted({ticker(x) for x in current.get("traded_symbols_today", [])}
+                                        | {ticker(x["ticker"]) for x in fills if x.get("kind") == "entry"}),
+    }
 
 
 def review(orders, cfg, now, portfolio=None, prices=None, state=None):
@@ -78,15 +116,14 @@ def review(orders, cfg, now, portfolio=None, prices=None, state=None):
     state = state or {}
     if not isinstance(state, dict):
         raise RiskError("broker state must be an object")
-    if state.get("date") and state["date"] != now.date().isoformat():
-        state = {}
+    state = _day_state(state, now)
     budget = cfg.get("budget_inr")
     if budget is None:
         budget = next((amount(o.get("capital_inr"), "proposal capital") for o in orders
                        if isinstance(o, dict) and o.get("capital_inr")), None)
     if budget is None:
         raise RiskError("risk check needs budget_inr or a paper proposal with capital_inr")
-    cash, holdings, equity, account_source = _portfolio(portfolio, budget)
+    cash, holdings, equity, account_source = _portfolio(portfolio, budget, prices, now)
     daily_loss = amount(state.get("daily_planned_loss_inr", 0), "daily planned loss", zero=True)
     trades = _count(state.get("trades_today", 0), "trades_today")
     orders_today = _count(state.get("orders_today", trades), "orders_today")
@@ -254,15 +291,19 @@ def main(argv=None):
     p.add_argument("--prices", default="trader/prices.json")
     p.add_argument("--state", default="trader/state/broker.json")
     p.add_argument("--now")
+    p.add_argument("--today", help="YYYY-MM-DD replay day; must match the IST clock")
     p.add_argument("--out", default="trader/state/risk.json")
     p.add_argument("--no-write", action="store_true")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     try:
+        now = clock(a.now)
+        if a.today and a.today != now.date().isoformat():
+            raise RiskError("--today must match the IST replay/current date")
         source = read_object(a.orders, "paper orders")
         orders = source.get("orders") if "orders" in source else [source]
         cfg = limits(config(a.config))
-        result = review(orders, cfg, clock(a.now),
+        result = review(orders, cfg, now,
                         read_object(a.portfolio, "paper portfolio", optional=True),
                         read_object(a.prices, "prices", optional=True),
                         read_object(a.state, "paper broker state", optional=True))

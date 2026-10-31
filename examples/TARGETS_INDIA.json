@@ -1,0 +1,8 @@
+{
+  "source": "Hypothetical INR paper allocation example; these are not portfolio recommendations",
+  "weights": [
+    {"ticker": "RELIANCE.NS", "name": "Reliance Industries", "weight": 40},
+    {"ticker": "TCS.NS", "name": "Tata Consultancy Services", "weight": 35},
+    {"ticker": "INFY.NS", "name": "Infosys", "weight": 25}
+  ]
+}

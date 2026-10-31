@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
@@ -12,7 +13,7 @@ from india_trader.core import IST
 from india_trader.trade_workflow import exit_plan
 
 
-def chart(interval="5m", gap=None, volume=1000):
+def chart(interval="5m", gap=None, volume=1000, ticker="RELIANCE.NS"):
     step = 5 if interval == "5m" else 1
     n_open = 15 // step
     start = datetime(2026, 10, 28, 9, 15, tzinfo=IST)
@@ -27,7 +28,7 @@ def chart(interval="5m", gap=None, volume=1000):
         lows.append(99)
         closes.append(close)
         volumes.append(volume)
-    doc = {"chart": {"result": [{"meta": {"symbol": "RELIANCE.NS", "currency": "INR",
+    doc = {"chart": {"result": [{"meta": {"symbol": ticker, "currency": "INR",
                 "dataGranularity": interval, "regularMarketTime": stamps[-1] + step * 60},
             "timestamp": stamps, "indicators": {"quote": [{"open": opens, "high": highs,
                  "low": lows, "close": closes, "volume": volumes}]}}]}}
@@ -67,8 +68,29 @@ class EntryTimerTests(unittest.TestCase):
             e.parse_chart(chart(), "TCS.NS", "5m")
         with self.assertRaises(e.EntryError):
             e.parse_chart(chart(), "RELIANCE.NS", "1m")
-        with self.assertRaises(e.EntryError):
-            e.ticker("500325.BO")
+        self.assertEqual(e.ticker("500325.BO"), "500325.BO")
+
+    def test_bse_cash_chart_uses_explicit_calendar_proxy_note(self):
+        c = e.parse_chart(chart(ticker="500325.BO"), "500325.BO", "5m")
+        result = e.evaluate(c, at("09:40"))
+        self.assertEqual(result["status"], "TRIGGERED")
+        self.assertIn("BSE closures unverified", result["calendar_note"])
+
+    def test_preopen_watch_waits_without_fetching(self):
+        current = [at("09:00")]
+        calls = []
+        def provider(now):
+            calls.append(now)
+            raise AssertionError("no chart should be fetched before the first close")
+        def sleep(seconds):
+            current[0] += timedelta(seconds=seconds)
+        with tempfile.TemporaryDirectory() as folder:
+            result = e.watch_loop(provider, lambda: current[0], sleep, lambda line: None,
+                SimpleNamespace(interval="5m", every=30), "RELIANCE.NS", at("09:00"),
+                at("09:10"), str(Path(folder) / "state.json"), str(Path(folder) / "entry.json"),
+                simulated=True)
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, [])
 
     def test_live_requires_provider_last_trade_time(self):
         c = e.parse_chart(chart(), "RELIANCE.NS", "5m")

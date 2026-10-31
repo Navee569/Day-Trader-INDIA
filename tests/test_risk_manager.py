@@ -89,6 +89,26 @@ class RiskManagerTests(unittest.TestCase):
                "daily_planned_loss_inr": 1500, "traded_symbols_today": ["RELIANCE.NS"]}
         self.assertEqual(r.review([proposal()], settings(), NOW, state=old)["status"], "PASS")
 
+    def test_daily_limits_recovered_from_fill_log(self):
+        state = {"orders": [{"date": NOW.date().isoformat(), "status": "simulated_fill",
+                             "kind": "entry", "fingerprint": "old", "ticker": "RELIANCE.NS",
+                             "side": "BUY_LONG_CASH", "max_loss_inr": 250}]}
+        self.assertIn("DUPLICATE_TICKER_TODAY", r.review([proposal()], settings(), NOW,
+                      state=state)["verdicts"][0]["reasons"])
+        self.assertIn("DAILY_TRADE_LIMIT", r.review([proposal("TCS.NS")],
+                      settings(max_trades_per_day=1), NOW, state=state)["verdicts"][0]["reasons"])
+
+    def test_fresh_quote_marks_existing_holding_for_position_cap(self):
+        order = dict(proposal(), quantity=20)
+        order["fingerprint"] = _fingerprint(order)
+        cfg = settings(max_position_pct=30)
+        portfolio = {"cash_inr": 5000, "equity_inr": 10000,
+                     "positions": [{"ticker": "TCS.NS", "quantity": 10, "average_cost_inr": 500}]}
+        self.assertEqual(r.review([order], cfg, NOW, portfolio=portfolio)["status"], "PASS")
+        prices = {"as_of": NOW.isoformat(), "prices": {"TCS.NS": 100}}
+        updated = r.review([order], cfg, NOW, portfolio=portfolio, prices=prices)
+        self.assertIn("POSITION_CAP", updated["verdicts"][0]["reasons"])
+
     def test_cli_records_exact_verdict_and_no_write(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -105,6 +125,7 @@ class RiskManagerTests(unittest.TestCase):
                     "--now", NOW.isoformat(), "--out", str(output)]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(r.main(args), 0)
+                self.assertEqual(r.main(args + ["--today", "2026-10-29", "--no-write"]), 0)
             self.assertEqual(json.loads(output.read_text())["status"], "PASS")
             output.unlink()
             with contextlib.redirect_stdout(io.StringIO()):

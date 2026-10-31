@@ -1,5 +1,14 @@
 # Changelog
 
+## Nine-workflow parity audit — 31 October 2026
+
+- Rechecked workflows 1–9 against the original source and recorded command, state, handoff, example, and data-source coverage in `PARITY_AUDIT_1_TO_9.md`.
+- Entry watch now waits for a completed bar before fetching and accepts BSE paper charts with an explicit NSE-calendar-proxy note.
+- Risk Manager recovers missing daily counts and planned loss from the fill log, values paper holdings with fresh dated prices when available, and accepts a matching `--today` replay date.
+- Paper Broker now supports readable tickets, explicit decline and failed/denied records, partial simulated fills, recovered daily counters, log history, date and quantity aliases.
+- Alerts now offers text and JSON output, saved/Yahoo quote source selection, selectable quote output paths, and a config flat-by fallback. India alert and weighted-target examples were added.
+- Live broker actions, unattended alert delivery, and unsupported quote/candle source claims were not added.
+
 ## Post-audit development state — 29–30 October 2026
 
 - Added the ninth upstream-style workflow, India Paper Alerts: IST/NSE normal-session clock, plan stop/target/flat-by rules, custom price/percent/time/opening-bell rules, once-only state and reset/rearm, unofficial dated Yahoo quote capture with query2/query1 fallback, holdings/plan quote selection, offline/saved replay, and a Codex skill. It checks only when invoked and never places orders or claims delivery of a desktop notification. 177 offline tests passed after this work.

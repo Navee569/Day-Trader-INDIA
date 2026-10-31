@@ -90,7 +90,7 @@ class AlertTests(unittest.TestCase):
             plan = root / "plan.json"
             plan.write_text(json.dumps(PLAN))
             rules, state, prices = root / "alerts.json", root / "state.json", root / "prices.json"
-            base = ["--now", NOW.isoformat(), "--rules", str(rules), "--state", str(state),
+            base = ["--json", "--now", NOW.isoformat(), "--rules", str(rules), "--state", str(state),
                     "--prices", str(prices), "--plan", str(plan)]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(a.main(base + ["add", "--from-plan"]), 0)
@@ -116,7 +116,7 @@ class AlertTests(unittest.TestCase):
             (offline / "yahoo-RELIANCE.NS.json").write_text(json.dumps(chart()))
             (root / "portfolio.json").write_text(json.dumps({"positions": [{"ticker": "TCS.NS", "quantity": 2}]}))
             (root / "plan.json").write_text(json.dumps(PLAN))
-            base = ["--now", NOW.isoformat(), "--rules", str(root / "alerts.json"),
+            base = ["--json", "--now", NOW.isoformat(), "--rules", str(root / "alerts.json"),
                     "--state", str(root / "state.json"), "--prices", str(root / "prices.json"),
                     "--plan", str(root / "plan.json"), "--portfolio", str(root / "portfolio.json")]
             captured = io.StringIO()
@@ -134,6 +134,31 @@ class AlertTests(unittest.TestCase):
             self.assertEqual(len(json.loads((root / "state.json").read_text())["rung"]), 2)
             with self.assertRaises(a.AlertError):
                 a.validate({"id": "late", "type": "time", "at": "15:25", "before_close": True})
+
+    def test_original_style_text_options_and_plan_config_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            plan = dict(PLAN)
+            plan.pop("flat_by_ist")
+            (root / "plan.json").write_text(json.dumps(plan))
+            (root / "config.json").write_text(json.dumps({"flat_by": "15:05"}))
+            offline = root / "offline"
+            offline.mkdir()
+            (offline / "yahoo-RELIANCE.NS.json").write_text(json.dumps(chart()))
+            rules, state, prices = root / "rules.json", root / "state.json", root / "prices.json"
+            base = ["--now", NOW.isoformat(), "--rules", str(rules), "--state", str(state),
+                    "--prices", str(prices), "--plan", str(root / "plan.json")]
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(a.main(base + ["add", "--from-plan", "--config", str(root / "config.json")]), 0)
+                self.assertEqual(a.main(base + ["quote", "RELIANCE", "--offline", str(offline),
+                                           "--source", "yahoo", "--write", str(prices)]), 0)
+                self.assertEqual(a.main(base + ["check", "--source", "saved", "--prices-out",
+                                           str(root / "other.json")]), 0)
+            self.assertEqual(json.loads(rules.read_text())["rules"][-1]["at"], "15:05")
+            self.assertIn("INR 94.00", output.getvalue())
+            self.assertIn("ALERT", output.getvalue())
+            self.assertFalse((root / "other.json").exists())
 
 
 if __name__ == "__main__":

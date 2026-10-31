@@ -30,8 +30,6 @@ class EntryError(Exception):
 def ticker(raw):
     s = str(raw).strip().upper()
     normalized = symbol(s, "BSE" if s.endswith(".BO") or s.isdigit() else "NSE")
-    if not normalized.endswith(".NS"):
-        raise EntryError("entry timer currently supports NSE cash equities only")
     return normalized
 
 
@@ -195,6 +193,8 @@ def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
     base = {"mode": "PAPER_RESEARCH_ONLY", "ticker": chart["ticker"], "setup": setup,
             "as_of": now.isoformat(), "bar_interval": interval, "opening_minutes": or_minutes,
             "data_origin": chart["source"], "data_verified_against_exchange": False,
+            "calendar_note": ("NSE 2026 normal-session calendar used as a proxy; BSE closures unverified"
+                              if chart["ticker"].endswith(".BO") else "NSE 2026 normal-session calendar"),
             "orders_possible": False, "status": "WAIT", "reason": "", "level": level,
             "range_high": None, "range_low": None, "completed_bars": 0,
             "last_close": None, "last_bar_start": None,
@@ -384,11 +384,27 @@ def watch_loop(provider, now_fn, sleep_fn, emit, a, sym, start, until, state_pat
     step = 5 if a.interval == "5m" else 1
     day = start.date()
     stop = min(until, datetime.combine(day, DEFAULT_AFTER, tzinfo=IST))
+    preopen_reported = False
     while True:
         now = now_fn()
         if now.date() != day or now > stop + timedelta(seconds=60):
             emit("EXPIRED: watch window ended without a new trigger")
             return 1
+        session_ok, session_reason = trading_day(now.date())
+        if not session_ok:
+            emit(f"MARKET_CLOSED: {session_reason}; nothing to watch")
+            return 1
+        first_close = datetime.combine(day, OPEN, tzinfo=IST) + timedelta(minutes=step)
+        if now < first_close:
+            if now >= stop:
+                emit("EXPIRED: watch ended before the first completed bar")
+                return 1
+            if not preopen_reported:
+                emit(f"{now:%H:%M} IST: waiting for the first completed {a.interval} bar at {first_close:%H:%M}")
+                preopen_reported = True
+            sleep_fn(max(1, min((first_close - now).total_seconds(), (stop - now).total_seconds(),
+                                a.every if not simulated else 86400)))
+            continue
         try:
             chart = provider(now)
             result = _result(a, sym, now, chart=chart, live=not simulated)

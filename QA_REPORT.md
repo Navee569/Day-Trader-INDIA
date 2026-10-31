@@ -1,5 +1,13 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## Nine-workflow parity pass — 31 October 2026
+
+- Compared the original workflows 1–9 at the command, state, handoff, and example level. The detailed mapping and the India-specific limits are in `PARITY_AUDIT_1_TO_9.md`.
+- Added offline regression cases for BSE entry paper charts and watch pre-open behavior; daily risk-counter recovery and fresh-quote holding valuation; broker partial fills, failed paper results and command handoff; alert source/output/config options and example files.
+- `python -m unittest discover -s tests -q`: **188 tests passed** on Windows Python 3.11.2. Expected invalid-input diagnostics from negative cases appeared on stderr. `python -m compileall -q india_trader`: passed. `git diff --check`: passed before committing.
+- Paper-only smoke: `python -m india_trader doctor` returned `status: OK`, `orders_possible: false`, and `market_data_connectivity: NOT_CHECKED`. `python -m india_trader alerts clock --now 2026-10-31T10:00:00+05:30 --json` returned `session_open: false`, `reason: weekend`, and next normal open 2 November 09:15 IST; its exit code **1 is expected for a closed market**. The file-based broker entry-to-exit/partial-result CLI path is exercised offline in `tests/test_paper_broker.py`.
+- This pass did not contact a live broker, submit an order, or verify live in-session BSE/Yahoo/Upstox/NSE quote coverage. Missing official filing archive, unsupported BSE candle aliases, unverified special sessions, and lack of a continuous notification service remain explicit limits. Earnings analyst and insider-disclosure tracker are original workflows 10–11, outside this pass.
+
 ## Post-audit Windows validation — Paper Alerts, 31 October 2026
 
 - The ninth original workflow is adapted as `alerts clock|add|quote|check|list|reset`. Six new offline tests cover NSE IST normal-session/holiday/unknown-calendar behavior, plan-derived stop/target/flat-by rules, custom percent/direction/time/opening-bell rules, once-only state and rearming, malformed/foreign-currency/NaN/stale quote refusal, dated quote handoff to budget sizing, and file-based CLI replay. The full suite passed **177/177** on Windows Python 3.11.2; module compilation passed.

@@ -36,6 +36,46 @@ def verdict(order, at=NOW, portfolio=None, state=None):
 
 
 class PaperBrokerTests(unittest.TestCase):
+    def test_broker_rebuilds_daily_limits_from_fill_log(self):
+        order = entry()
+        state = {"orders": [{"date": NOW.date().isoformat(), "status": "simulated_fill",
+                              "fingerprint": order["fingerprint"], "ticker": "RELIANCE.NS",
+                              "kind": "entry", "quantity": 20, "max_loss_inr": 100}]}
+        rebuilt = b._today_state(state, NOW)
+        self.assertEqual(rebuilt["trades_today"], 1)
+        self.assertEqual(rebuilt["orders_today"], 1)
+        self.assertEqual(rebuilt["daily_planned_loss_inr"], 100)
+        self.assertEqual(rebuilt["traded_symbols_today"], ["RELIANCE.NS"])
+
+    def test_partial_paper_fills_count_one_trade_and_one_order(self):
+        order, state = entry(), b._today_state({}, NOW)
+        risk = verdict(order)
+        portfolio = b._portfolio("nonexistent-paper-portfolio.json", setup())
+        b.decide(order, risk, state, NOW, 1, "yes RELIANCE.NS")
+        first = b.simulate_fill(order, risk, state, portfolio, setup(), NOW, 100, quantity=20)
+        self.assertEqual(first["remaining_quantity"], 30)
+        self.assertEqual(b.ticket(order, risk, state, NOW, 1)["status"], "PARTIAL_FILL")
+        later = NOW + timedelta(minutes=10)
+        second = b.simulate_fill(order, risk, state, portfolio, setup(), later, 100, quantity=30)
+        self.assertEqual(second["remaining_quantity"], 0)
+        self.assertEqual(portfolio["positions"][0]["quantity"], 50)
+        self.assertEqual(state["trades_today"], 1)
+        self.assertEqual(state["orders_today"], 1)
+        self.assertEqual(state["daily_planned_loss_inr"], 250)
+        with self.assertRaises(b.BrokerError):
+            b.simulate_fill(order, risk, state, portfolio, setup(), later, 100, quantity=1)
+
+    def test_denied_or_failed_paper_result_keeps_portfolio_unchanged(self):
+        order, state = entry(), b._today_state({}, NOW)
+        risk = verdict(order)
+        portfolio = b._portfolio("nonexistent-paper-portfolio.json", setup())
+        b.decide(order, risk, state, NOW, 1, "yes")
+        b.record_result(order, state, NOW, "failed", "paper quote unavailable")
+        with self.assertRaises(b.BrokerError):
+            b.simulate_fill(order, risk, state, portfolio, setup(), NOW, 100)
+        self.assertEqual(portfolio["cash_inr"], 10000)
+        self.assertEqual(state["trades_today"], 0)
+
     def test_exact_yes_ticket_fill_and_duplicate_guard(self):
         order = entry()
         risk = verdict(order)
@@ -147,6 +187,34 @@ class PaperBrokerTests(unittest.TestCase):
             final = json.loads(paths["portfolio"].read_text())
             self.assertEqual(final["positions"], [])
             self.assertEqual(final["realized_pnl_inr"], -100)
+
+    def test_cli_partial_fill_and_failed_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            order = entry()
+            paths = {key: root / f"{key}.json" for key in ("orders", "risk", "state", "portfolio", "config")}
+            paths["orders"].write_text(json.dumps({"orders": [order]}))
+            paths["risk"].write_text(json.dumps(verdict(order)))
+            paths["config"].write_text(json.dumps({"paper": True, "budget_inr": 10000,
+                "max_position_pct": 50, "max_order_inr": 10000,
+                "slippage_bps_per_side": 0, "fee_buffer_inr": 0}))
+            base = ["--orders", str(paths["orders"]), "--risk", str(paths["risk"]),
+                    "--state", str(paths["state"]), "--portfolio", str(paths["portfolio"]),
+                    "--config", str(paths["config"]), "--now", NOW.isoformat(),
+                    "--today", NOW.date().isoformat()]
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(b.main(base + ["show"]), 0)
+                self.assertEqual(b.main(base + ["approve", "--index", "1", "--reply", "yes RELIANCE.NS"]), 0)
+                self.assertEqual(b.main(base + ["fill", "--index", "1", "--price", "100",
+                                                 "--qty", "20", "--confirm", "PAPER"]), 0)
+                self.assertEqual(b.main(base + ["result", "--index", "1", "--status", "failed",
+                                                 "--note", "paper remainder cancelled"]), 0)
+                self.assertEqual(b.main(base + ["log", "--all"]), 0)
+            self.assertIn("PAPER TICKET", output.getvalue())
+            self.assertEqual(json.loads(paths["portfolio"].read_text())["positions"][0]["quantity"], 20)
+            events = json.loads(paths["state"].read_text())["orders"]
+            self.assertEqual([x["status"] for x in events], ["approved", "simulated_fill", "failed"])
 
 
 if __name__ == "__main__":
