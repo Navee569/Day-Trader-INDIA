@@ -1,5 +1,10 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## Post-audit Windows validation — Paper Alerts, 31 October 2026
+
+- The ninth original workflow is adapted as `alerts clock|add|quote|check|list|reset`. Six new offline tests cover NSE IST normal-session/holiday/unknown-calendar behavior, plan-derived stop/target/flat-by rules, custom percent/direction/time/opening-bell rules, once-only state and rearming, malformed/foreign-currency/NaN/stale quote refusal, dated quote handoff to budget sizing, and file-based CLI replay. The full suite passed **177/177** on Windows Python 3.11.2; module compilation passed.
+- The CLI tests use saved Yahoo-shaped quote fixtures. A separate read-only public quote smoke on 31 October returned unofficial `RELIANCE.NS` INR 1164.90, previous close INR 1167.40, with market timestamp **30 October 15:28:17 IST**; no price file was written. The live clock smoke on Saturday 31 October returned `session_open: false`, `reason: weekend`, and next normal open 2 November 09:15 IST. Query1 fallback, a live in-session alert run, and third-party notification delivery were not validated. The check returns a ring in JSON/CLI output only when invoked. A missed poll can miss a crossed level. The 2026 NSE normal-session calendar does not verify special/early sessions, BSE hours or future years. No broker order, stop order, automatic flatten, or profit claim is made.
+
 ## Post-audit Windows validation — Paper Broker, 31 October 2026
 
 - The eighth upstream workflow now has paper ticket display, one-ticket exact yes/no records, a local simulated-fill ledger, paper cash/whole-share holdings, gross realized P&L, and a flatten proposal routed back through Risk Manager. The implementation has no broker network client or live-order function. A supplied INR fill price is a simulation input, not an observed exchange fill.
