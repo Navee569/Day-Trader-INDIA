@@ -1,5 +1,11 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## Post-audit Windows validation — Risk Manager, 31 October 2026
+
+- `risk-manager` adds batch paper checks and recorded exact-order verdicts. Five new tests cover sequential daily loss, changed order fingerprints, fresh-price reward:risk, duplicates, closed entry windows, unreviewed allocations, position-reducing exits and CLI save/no-write. The full offline suite passed **165/165** on Windows Python 3.11.2 and module compilation passed.
+- A saved historical RELIANCE paper proposal checked at a pinned 29 October 09:41 IST clock returned PASS: recalculated maximum loss Rs.239.38 and reward:risk 1.475. The saved verdict opened an `AWAITING_APPROVAL` paper ticket with `fill: null` and `orders_possible: false`. No live price, broker connection, fill or user approval was used.
+- The 2026 normal-session holiday list is checked. Future dates, special sessions, BSE hours, broker cash and actual fills are unverified. The batch assumes earlier passed proposals filled only while calculating later limits; it records no simulated fill or broker state.
+
 ## Post-audit Windows validation — Budget Manager, 30 October 2026
 
 - The sixth upstream workflow is implemented locally as `budget-manager`, plus a repo-local Codex skill and INR example config. The one-plan mode uses four explicit whole-share limits, a dated higher-price adjustment (15-minute cutoff), limit-price option, minimum order and reward:risk gates, blocked ticker/date checks, and a saved paper proposal collection. Weighted mode normalizes and caps allocations, drops small slices, reports idle INR, and supports priced whole-share references; no-stop allocations cannot pass the existing risk checker.

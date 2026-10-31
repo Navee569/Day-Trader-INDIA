@@ -20,6 +20,7 @@ from . import entry_timer
 from . import exit_planner
 from . import time_machine
 from . import budget_manager
+from . import risk_manager
 
 
 def attach_bars(p, symbol_optional=False):
@@ -55,6 +56,8 @@ def main(argv=None):
         return time_machine.main(argv[1:])
     if argv and argv[0] == "budget-manager":
         return budget_manager.main(argv[1:])
+    if argv and argv[0] == "risk-manager":
+        return risk_manager.main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m india_trader", description="NSE/BSE cash-equity research; PAPER ONLY")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scanner", help="Full NSE EQ universe, daily setup, and marketwide ORB scanner")
@@ -63,6 +66,7 @@ def main(argv=None):
     sub.add_parser("exit-planner", help="Plan or show a paper stop, target, and flat-by time")
     sub.add_parser("time-machine", help="Seeded paper scenario replay and historical ORB rule check")
     sub.add_parser("budget-manager", help="Four-limit INR paper trade sizing and weighted allocation")
+    sub.add_parser("risk-manager", help="Batch paper risk checks and exact-order verdicts")
     f = sub.add_parser("fetch", help="Fetch 5-minute bars: read-only Upstox if configured, then Yahoo")
     f.add_argument("symbol")
     f.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
@@ -248,6 +252,14 @@ def main(argv=None):
                 order = proposals[0]
             with open(args.risk, encoding="utf-8") as stream:
                 review = json.load(stream)
+            if isinstance(review, dict) and "verdicts" in review:
+                verdicts = review["verdicts"]
+                if not isinstance(verdicts, list) or len(verdicts) != 1:
+                    raise ValueError("Paper ticket needs one exact risk verdict")
+                verdict = verdicts[0]
+                review = {"status": verdict.get("status"),
+                          "order_fingerprint": verdict.get("order_fingerprint"),
+                          "checked_at": review.get("checked_at")}
             approved = args.approve and input("Type YES to approve this exact PAPER ticket (no fill): ").strip() == "YES"
             result = paper_ticket(order, review, approved)
         else:

@@ -165,6 +165,18 @@ Single-trade size is the smallest whole-share count allowed by **four limits**: 
 
 `--write` saves a paper proposal collection at `trader/orders.json`. The existing `risk` and `paper-ticket` commands accept a collection containing exactly one stop-and-target proposal. A refusal overwrites the saved collection with zero proposals, so a stale proposal cannot be reused accidentally. Weights mode accepts `--weights` or a `--targets` JSON file; it renormalizes after blocked/zero/top-N filters, caps overweight slices, drops undersized slices, and reports idle cash. Without a dated `--prices` file it shows **indicative INR allocations only**. With prices it rounds to whole shares but marks every allocation `UNREVIEWED_NO_STOP`; each ticker needs its own exit plan before paper risk approval. The calculation assumes a one-share market lot; verify the security's series and lot before relying on it. [NSE's normal-market trading-system description](https://www.nseindia.com/static/products-services/equity-market-trading-system) says the market lot is one for shares in compulsory dematerialised mode. No fractional cash shares, broker orders, or simulated fills are created.
 
+### Risk Manager: seventh upstream workflow
+
+`risk-manager` reads `trader/orders.json`, optional config, prices, portfolio and paper broker state, and checks each order in sequence. It recalculates stop loss and reward:risk from a higher fresh dated price, then checks the blocked list, order size, position cap, cash buffer, daily planned loss, trade and order counts, duplicates, completed paper trigger and IST entry window. It saves each PASS/BLOCK verdict with the exact order fingerprint. A later order in a batch is checked against earlier passed proposals as if they filled for the **limit calculation only**. A paper exit may reduce a verified holding even after the entry window or a daily limit, but cannot sell more shares than held.
+
+```powershell
+python -m india_trader risk-manager --orders trader/orders.json
+python -m india_trader risk-manager --orders trader/orders.json --no-write --json
+python -m india_trader paper-ticket --order trader/orders.json --risk trader/state/risk.json
+```
+
+The saved risk result is a paper rules check, not approval or a fill. This reviewer uses the known 2026 normal-session NSE holiday list; future calendars, special sessions and BSE hours are not verified. It has no broker connection or margin/derivatives/short-selling path.
+
 ### News monitor (upstream workflow 2, India adaptation)
 
 ```powershell
@@ -207,7 +219,7 @@ Upload this ZIP and ask ChatGPT to inspect `SKILL.md` and analyze **your verifie
 
 ## Using Codex (without Claude)
 
-Open the folder in Codex; `AGENTS.md` is the repo policy file. `.agents/skills/india-trader-scanner/SKILL.md` covers the scanner, `.agents/skills/india-trader-news/SKILL.md` covers the news monitor, `.agents/skills/india-trader-entry/SKILL.md` covers the entry timer, `.agents/skills/india-trader-exit/SKILL.md` covers the exit planner, `.agents/skills/india-trader-time-machine/SKILL.md` covers Time Machine, `.agents/skills/india-trader-budget/SKILL.md` covers INR budget sizing, and `.agents/skills/india-day-trader/SKILL.md` covers the other paper research commands. Invoke the matching `$india-trader-*` skill for each implemented workflow. Codex uses the Python installed in its environment; make sure your shell can run `python`.
+Open the folder in Codex; `AGENTS.md` is the repo policy file. `.agents/skills/india-trader-scanner/SKILL.md` covers the scanner, `.agents/skills/india-trader-news/SKILL.md` covers the news monitor, `.agents/skills/india-trader-entry/SKILL.md` covers the entry timer, `.agents/skills/india-trader-exit/SKILL.md` covers the exit planner, `.agents/skills/india-trader-time-machine/SKILL.md` covers Time Machine, `.agents/skills/india-trader-budget/SKILL.md` covers INR budget sizing, `.agents/skills/india-trader-risk/SKILL.md` covers risk review, and `.agents/skills/india-day-trader/SKILL.md` covers the other paper research commands. Invoke the matching `$india-trader-*` skill for each implemented workflow. Codex uses the Python installed in its environment; make sure your shell can run `python`.
 
 ### Time Machine: fifth upstream workflow
 
@@ -240,20 +252,21 @@ Only the first 72 five-minute bars (through 15:15 IST) are included to avoid clo
 | Original exit planner: plan ahead/confirmed entry, five stops, R/price targets, ATR, show/save, tick and flat-by checks | Implemented and offline tested; tick is an explicit assumption and Yahoo ATR data is unofficial |
 | Original Time Machine: seeded 10,000-path scenarios, 60-day full-session pool, historical ORB rule replay, verdict, saved fan chart/histogram | Implemented and offline tested for NSE cash-equity paper research, including manual sell-side replay; Yahoo bars are unofficial and outcomes are not calibrated probabilities |
 | Original budget manager: four-limit paper sizing, fresh quote, limit, blocked/minimum/reward gates, weighted allocation | Implemented and offline tested in INR; weighted cash shares are whole-share or indicative only, with no-stop allocations blocked by risk review |
-| Risk and paper ticket | Basic handoff implemented and tested offline; no simulated fill ledger |
+| Original risk manager: batch entry checks, fresh-price recomputation, daily limits, exits, exact-order verdicts | Implemented and offline tested for paper NSE/BSE cash research; no broker fill ledger or future/special-session calendar |
+| Paper ticket | Basic paper handoff implemented and tested offline; no simulated fill ledger |
 | Real-time exchange-approved live market feed | **Not implemented** |
 | Original news monitor: NSE RSS filings, India headlines, price moves, deduplication, state, offline replay | Implemented and offline tested; public RSS horizon is short and filing links can be missing |
 | Financial statement analysis/NLP and complete filing archive | **Not implemented** |
 | Marketwide sentiment/realtime alerts | **Not implemented** |
 | Indian exchange holiday + Muhurat + special-auction calendar | **Not implemented** |
 | Broker API, order placement, broker fees, tax engine | **Not implemented (safety boundary)** |
-| Original 11 Claude skills, full parity | **Not implemented**; first six adapted workflows are present |
+| Original 11 Claude skills, full parity | **Not implemented**; first seven adapted workflows are present |
 | Graphical UI | **Not implemented** |
 
 **Why not claim full parity?** US SEC/EDGAR, Pelosi disclosures, Alpaca MCP and US-specific trading rules are not Indian market components and cannot be truthfully relabeled as NSE/BSE integrations. Real equivalents require different audited feeds, policies, connectors and independent acceptance tests.
 
 ## QA and provenance
 
-See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. This later working state passed 160 offline tests on Windows Python 3.11. NSE daily Bhavcopy, NSE/BSE security masters, Yahoo scanner, Yahoo paper-cycle, and public NSE/India news feed smoke checks ran; Upstox, CM Market Live during market hours, actual order execution and profitability have **not** been validated. The scanner has a built-in 2026 NSE holiday list, but special sessions and future calendars remain unverified. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
+See `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. This later working state passed 165 offline tests on Windows Python 3.11. NSE daily Bhavcopy, NSE/BSE security masters, Yahoo scanner, Yahoo paper-cycle, and public NSE/India news feed smoke checks ran; Upstox, CM Market Live during market hours, actual order execution and profitability have **not** been validated. The scanner has a built-in 2026 NSE holiday list, but special sessions and future calendars remain unverified. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
 
 Sources: [NSE tick-size circular](https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf), [2026 closing-auction timing reference](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/what-are-the-market-timings), [NSE market timings](https://www.nseindia.com/static/market-data/market-timings), [OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills), [upstream project](https://github.com/Jakeschincariol/day-trader-skill).
