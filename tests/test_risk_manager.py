@@ -84,6 +84,11 @@ class RiskManagerTests(unittest.TestCase):
         self.assertIn("EXIT_EXCEEDS_HOLDING", r.review([too_many], settings(), late,
                       portfolio=portfolio)["verdicts"][0]["reasons"])
 
+    def test_prior_day_paper_counters_do_not_block_new_day(self):
+        old = {"date": "2026-10-28", "trades_today": 3, "orders_today": 10,
+               "daily_planned_loss_inr": 1500, "traded_symbols_today": ["RELIANCE.NS"]}
+        self.assertEqual(r.review([proposal()], settings(), NOW, state=old)["status"], "PASS")
+
     def test_cli_records_exact_verdict_and_no_write(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

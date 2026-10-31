@@ -78,6 +78,8 @@ def review(orders, cfg, now, portfolio=None, prices=None, state=None):
     state = state or {}
     if not isinstance(state, dict):
         raise RiskError("broker state must be an object")
+    if state.get("date") and state["date"] != now.date().isoformat():
+        state = {}
     budget = cfg.get("budget_inr")
     if budget is None:
         budget = next((amount(o.get("capital_inr"), "proposal capital") for o in orders

@@ -1,5 +1,11 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## Post-audit Windows validation — Paper Broker, 31 October 2026
+
+- The eighth upstream workflow now has paper ticket display, one-ticket exact yes/no records, a local simulated-fill ledger, paper cash/whole-share holdings, gross realized P&L, and a flatten proposal routed back through Risk Manager. The implementation has no broker network client or live-order function. A supplied INR fill price is a simulation input, not an observed exchange fill.
+- `python -m unittest discover -s tests -v` passed **171/171** on Windows Python 3.11.2. `python -m compileall -q india_trader` passed. Five broker tests cover changed/stale verdicts, one-order approval, decline, explicit-price fill, duplicate/daily-limit refusal, cash/holding changes, late-session exit, and the complete file-based CLI handoff through flatten and realized loss. A sixth integration regression checks that prior-day risk counters reset. These tests used temporary files and hypothetical prices; no live broker or market feed was involved.
+- The paper ledger does not deduct Indian broker fees or taxes, mark holdings to current market prices, place working stop/target orders, or automatically close at the flat-by time. No actual trading or profitability is validated. The original Alpaca/IBKR/Claude approval-card path is intentionally absent because this India workflow is restricted to local paper simulation.
+
 ## Post-audit Windows validation — Risk Manager, 31 October 2026
 
 - `risk-manager` adds batch paper checks and recorded exact-order verdicts. Five new tests cover sequential daily loss, changed order fingerprints, fresh-price reward:risk, duplicates, closed entry windows, unreviewed allocations, position-reducing exits and CLI save/no-write. The full offline suite passed **165/165** on Windows Python 3.11.2 and module compilation passed.
