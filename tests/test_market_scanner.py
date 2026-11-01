@@ -41,20 +41,24 @@ def chart(ticker, series):
 
 
 class MarketScannerTests(unittest.TestCase):
-    def test_bse_stage_one_recovers_from_yahoo_gap_with_upstox(self):
+    def test_bse_stage_one_prefers_upstox_before_yahoo(self):
         ticker = "500325.BO"
-        payload = json.dumps(chart(ticker, bars([100, 100, 100, 105, 106]))).encode()
+        series = bars([100, 100, 100, 105, 106])
+        rows = [{"timestamp": datetime.fromtimestamp(ts, IST).isoformat(),
+                 "open": series["c"][i], "high": series["h"][i],
+                 "low": series["l"][i], "close": series["c"][i],
+                 "volume": series["v"][i]} for i, ts in enumerate(series["t"])]
         args = SimpleNamespace(max_source_fallback=0, json=True, quiet=True)
         with patch.dict(os.environ, {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
-                patch.object(m, "yahoo_get", return_value=b"{}"), \
-                patch.object(m, "parse_spark", return_value={}), \
-                patch("india_trader.intraday_sources.upstox_chart",
-                      return_value=(payload, "Upstox read-only")) as up:
+                patch.object(m, "yahoo_get") as yahoo, \
+                patch("india_trader.intraday_sources.upstox_instrument", return_value="INE002A01018"), \
+                patch("india_trader.intraday_sources.upstox_bars", return_value=rows) as up:
             data, failed = m.fetch_spark([ticker], "1d", "5m", 0, args, DAY)
         self.assertIn(ticker, data)
-        self.assertEqual(data[ticker]["meta"]["data_provider"], "Upstox read-only")
+        self.assertIn("Upstox", data[ticker]["meta"]["data_provider"])
         self.assertEqual(failed, {})
         up.assert_called_once()
+        yahoo.assert_not_called()
 
     def test_ist_window_and_holiday(self):
         self.assertEqual(m.to_ist(datetime(2026, 10, 28, 4, 0)), datetime(2026, 10, 28, 9, 30))

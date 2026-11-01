@@ -165,31 +165,31 @@ def parse_chart(raw, sym, interval, source="Yahoo Finance unofficial"):
         raise EntryError(f"invalid chart for {sym}: {exc}") from exc
 
 
-def get_chart(sym, interval, day, offline=None):
+def get_chart(sym, interval, day, offline=None, require_entry_ready=False):
     if offline:
         return parse_chart(_read_offline(offline, sym), sym, interval)
-    attempts = []
     age = (datetime.now(IST).date() - day).days
     rng = "1d" if age == 0 else "5d" if age <= 4 else "1mo" if age <= 28 else "60d"
-    if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
-        try:
-            from .intraday_sources import upstox_chart
-            raw, source = upstox_chart(sym, range_=rng, interval=int(interval[:-1]), end_day=day)
-            return parse_chart(raw, sym, interval, source)
-        except (OSError, ValueError, TypeError, KeyError, EntryError) as exc:
-            attempts.append({"source": "Upstox", "status": "FAILED", "reason": type(exc).__name__})
-    if sym.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
-        try:
-            from .intraday_sources import fyers_chart
-            raw, source = fyers_chart(sym, range_=rng, interval=int(interval[:-1]), end_day=day)
-            result = parse_chart(raw, sym, interval, source)
-            result["provider_attempts"] = attempts
-            return result
-        except (OSError, ValueError, TypeError, KeyError, EntryError) as exc:
-            attempts.append({"source": "FYERS", "status": "FAILED", "reason": type(exc).__name__})
-    result = parse_chart(_fetch_yahoo(sym, interval, day), sym, interval)
-    result["provider_attempts"] = attempts
-    return result
+    from .market_data_manager import MarketDataManager, FeedUnavailable
+    from .intraday_sources import _bars_chart
+    manager = MarketDataManager()
+    try:
+        fetched = manager.fetch_candles(sym, rng, interval=int(interval[:-1]), end_day=day,
+                                        require_entry_ready=require_entry_ready,
+                                        allow_yahoo=(not require_entry_ready and interval == "5m" and age == 0))
+        raw, _ = _bars_chart(sym, fetched["bars"], int(interval[:-1]), fetched["source"])
+        result = parse_chart(raw, sym, interval, fetched["source"])
+        result["provider_attempts"] = fetched["attempts"]
+        result["entry_ready"] = fetched["entry_ready"]
+        result["quality"] = fetched["quality"]
+        return result
+    except FeedUnavailable as exc:
+        # Historical replay and Yahoo one-minute research still use the chart
+        # endpoint. They cannot authorize a current paper entry.
+        result = parse_chart(_fetch_yahoo(sym, interval, day), sym, interval)
+        result["provider_attempts"] = exc.attempts
+        result["entry_ready"] = False
+        return result
 
 
 def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
@@ -236,6 +236,9 @@ def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
             base["calendar_note"] = "BSE current-year public calendar; special-session entry timing unsupported"
     if not valid:
         return dict(base, status="MARKET_CLOSED", reason=why)
+    if live and chart.get("entry_ready") is False:
+        return dict(base, status="DATA_UNVERIFIED",
+                    reason="provider quality or independent provenance is insufficient for a new paper entry")
     if live and chart["data_time"] is None:
         return dict(base, status="DATA_UNVERIFIED", reason="live provider supplied no last-trade timestamp")
     if live and chart["data_time"] > now + timedelta(minutes=10):
@@ -331,7 +334,8 @@ def load_watchlist(path):
 
 
 def _chart_for(a, sym, day):
-    return get_chart(sym, a.interval, day, a.offline)
+    return get_chart(sym, a.interval, day, a.offline,
+                     require_entry_ready=not a.offline and not a.now)
 
 
 def _result(a, sym, when, level=None, chart=None, live=False):

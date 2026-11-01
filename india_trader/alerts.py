@@ -7,7 +7,6 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 import json
 import io
-import os
 from pathlib import Path
 import re
 import sys
@@ -15,7 +14,7 @@ import time as time_module
 
 from .budget_manager import BudgetError, clock, ticker
 from .core import IST
-from .market_scanner import OPEN, ScanError, chart_path, trading_day, yahoo_get
+from .market_scanner import OPEN, ScanError, trading_day
 from . import calendar_source
 
 
@@ -178,22 +177,22 @@ def parse_yahoo(payload, sym):
 
 def quotes_for(symbols, offline=None):
     found, errors = {}, []
+    if not offline:
+        from .market_data_manager import MarketDataManager
+        manager = MarketDataManager()
     for sym in dict.fromkeys(symbols):
-        attempts = []
-        if not offline and os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
+        if not offline:
             try:
-                from .intraday_sources import upstox_quote
-                found[sym] = upstox_quote(sym)
+                quote = manager.fetch_quote(sym)
+                found[sym] = {**quote, "provider_attempts": quote["attempts"]}
                 continue
             except (OSError, ValueError, TypeError, KeyError) as exc:
-                attempts.append({"source": "Upstox", "status": "FAILED", "reason": type(exc).__name__})
+                errors.append({"ticker": sym, "error": type(exc).__name__})
+                continue
         try:
-            if offline:
-                payload = (Path(offline) / f"yahoo-{sym}.json").read_text(encoding="utf-8")
-            else:
-                payload = yahoo_get(chart_path(sym, "1d", "1d"))
+            payload = (Path(offline) / f"yahoo-{sym}.json").read_text(encoding="utf-8")
             found[sym] = parse_yahoo(payload, sym)
-            found[sym]["provider_attempts"] = attempts
+            found[sym]["provider_attempts"] = []
         except (OSError, ScanError, AlertError) as exc:
             errors.append({"ticker": sym, "error": str(exc)})
     return found, errors

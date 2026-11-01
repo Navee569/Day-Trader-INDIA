@@ -1,0 +1,11 @@
+services:
+  scanner:
+    secrets: [fyers_app_id, fyers_access_token]
+  paper:
+    secrets: [fyers_app_id, fyers_access_token]
+
+secrets:
+  fyers_app_id:
+    file: ./secrets/fyers_app_id
+  fyers_access_token:
+    file: ./secrets/fyers_access_token

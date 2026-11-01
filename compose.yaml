@@ -1,0 +1,137 @@
+name: day-trader-india-paper
+
+x-paper-service: &paper-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: day-trader-india-paper:stage7
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=128m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  volumes:
+    - trader_data:/app/trader
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  database:
+    <<: *paper-service
+    command: ["python", "-m", "india_trader", "deploy", "database"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "india_trader", "deploy", "health", "database"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  scanner:
+    <<: *paper-service
+    stop_grace_period: 9m
+    command: ["python", "-m", "india_trader", "deploy", "worker", "scanner"]
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "india_trader", "deploy", "health", "scanner"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 5m
+
+  committee:
+    <<: *paper-service
+    stop_grace_period: 5m
+    command: ["python", "-m", "india_trader", "deploy", "worker", "committee"]
+    volumes:
+      - trader_data:/app/trader
+      - codex_home:/data/codex
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "india_trader", "deploy", "health", "committee"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 5m
+
+  paper:
+    <<: *paper-service
+    stop_grace_period: 3m
+    command: ["python", "-m", "india_trader", "deploy", "worker", "paper"]
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "india_trader", "deploy", "health", "paper"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 5m
+
+  backend:
+    <<: *paper-service
+    command: ["python", "-m", "india_trader", "deploy", "web"]
+    environment:
+      DAY_TRADER_CONTAINER: "1"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "india_trader", "deploy", "health", "backend"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: day-trader-india-frontend:stage7
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:${DAY_TRADER_PORT:-8787}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  maintenance:
+    <<: *paper-service
+    profiles: ["tools"]
+    entrypoint: ["python", "-m", "india_trader", "deploy"]
+    restart: "no"
+    volumes:
+      - trader_data:/app/trader
+      - ./backups:/backup
+
+volumes:
+  trader_data:
+  codex_home:

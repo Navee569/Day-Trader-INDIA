@@ -4,6 +4,8 @@ An **independent, defensive Python implementation** inspired by the [MIT-license
 
 **Safety:** paper-only; no broker order connector or autonomous trade execution. An optional locally entered Upstox Analytics Token is read-only market-data access. Do not use Yahoo quotes for live execution. No investment advice.
 
+For the responsive local dashboard and private Linux Docker deployment, see [Stage 6 mobile frontend](STAGE6_MOBILE_FRONTEND.md) and [Stage 7 server deployment](STAGE7_SERVER_DEPLOYMENT.md). The deployed scanner, AI committee and paper monitor are a separate autonomous **simulation**; they never place live broker orders.
+
 ## Getting started — Windows 10/11
 
 Install **Python 3.11 or newer**. No pip dependencies required. Extract the ZIP. In File Explorer, open the `Day_Trader_India_ChatGPT_Codex_v0.2.1` folder; click the address bar, type `powershell`, press Enter, and run:

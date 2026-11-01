@@ -6,11 +6,16 @@ venv/
 trader/
 .env
 .env.*
+!.env.example
+backups/
+secrets/
 *.token
 *.key
 *.pem
 *.log
 build/
 dist/
+node_modules/
+*.tsbuildinfo
 Thumbs.db
 .DS_Store

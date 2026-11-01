@@ -1,0 +1,4 @@
+# Optional official SDKs for read-only quote WebSockets.
+# REST candle/quote/status adapters and the offline tests use Python stdlib.
+upstox-python-sdk
+fyers-apiv3

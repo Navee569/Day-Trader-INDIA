@@ -2,6 +2,11 @@
 
 - This code is a research-grade **paper-only** Indian NSE/BSE cash-equity adapter. Never place orders, import brokerage credentials, change `PAPER_ONLY` or imply a generated signal is actionable.
 - Load `.agents/skills/india-day-trader/SKILL.md` when market research, risk sizing, backtesting or NSE/BSE tasks are requested. Use the Python module to calculate; never invent price bars.
+- For the Stage 4 AI committee use `python -m india_trader ai-committee check|once|run|status`. AI decisions are expiring paper research records, never order authorization. The Codex CLI must use a local ChatGPT login and a read-only sandbox.
+- For Stage 5 use `python -m india_trader paper-lifecycle once|run|status`. It is an autonomous local simulation with a separate ledger and no live order connector. Its exits must keep running when AI is unavailable; a market-data outage must be reported as an open-position risk, never hidden by a fabricated fill.
+- The Stage 5 accounting supplement is `python -m india_trader paper-lifecycle report` and `PAPER_ENGINE_ACCOUNTING.md`. Reconcile cash, fills, holdings, reservations and P&L before relying on a paper summary. Example Indian charge rates are configurable assumptions and may differ from a broker contract note.
+- Stage 6 is the local responsive paper dashboard (`python -m india_trader web serve`); see `STAGE6_MOBILE_FRONTEND.md`. Never expose it beyond loopback without the separate Stage 7 deployment and security review.
+- Stage 7 deployment uses `compose.yaml`, the private Tailscale Serve host path, and `STAGE7_SERVER_DEPLOYMENT.md`. Keep the frontend port on host loopback, provider credentials in local Compose secret files, Codex login in a separate volume, and JSON paper state authoritative. Never restore a stale ledger automatically or expose an unauthenticated admin route.
 - Load `.agents/skills/india-trader-scanner/SKILL.md` for NSE marketwide scanning, daily setups, opening-range candidate search, or watchlist creation.
 - Load `.agents/skills/india-trader-news/SKILL.md` for Indian company headlines, NSE disclosures, or watchlist news checks.
 - Load `.agents/skills/india-trader-entry/SKILL.md` for completed-bar entry checks, a bounded entry watch, or scanner-watchlist entry timing.

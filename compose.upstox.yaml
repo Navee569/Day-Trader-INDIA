@@ -1,0 +1,9 @@
+services:
+  scanner:
+    secrets: [upstox_analytics_token]
+  paper:
+    secrets: [upstox_analytics_token]
+
+secrets:
+  upstox_analytics_token:
+    file: ./secrets/upstox_analytics_token

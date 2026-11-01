@@ -1,0 +1,59 @@
+{
+  "analysts": [
+    {
+      "id": "AI1",
+      "provider": "codex_cli",
+      "model": null,
+      "role": "technical_analyst",
+      "enabled": true,
+      "instructions": "Evaluate completed-bar ORB, volume, VWAP, moving average, RSI, ATR, volatility and spread. State when an indicator is unavailable. Challenge weak or late breakouts.",
+      "timeout_seconds": 60,
+      "max_retries": 0,
+      "max_prompt_chars": 20000,
+      "max_answer_chars": 8000
+    },
+    {
+      "id": "AI2",
+      "provider": "codex_cli",
+      "model": null,
+      "role": "news_market_analyst",
+      "enabled": false,
+      "instructions": "Evaluate only supplied, dated news, earnings, announcements, sector and market context. User-supplied context is unverified; never invent a headline or earnings result. Identify missing context.",
+      "timeout_seconds": 60,
+      "max_retries": 0,
+      "max_prompt_chars": 20000,
+      "max_answer_chars": 8000
+    },
+    {
+      "id": "AI3",
+      "provider": "codex_cli",
+      "model": null,
+      "role": "risk_critic",
+      "enabled": false,
+      "instructions": "Challenge false breakouts, liquidity, volatility, spread, slippage, missing stop and target, conflicting evidence and market risk. Do not assume an executable fill or profitable trade.",
+      "timeout_seconds": 60,
+      "max_retries": 0,
+      "max_prompt_chars": 20000,
+      "max_answer_chars": 8000
+    }
+  ],
+  "judge": {
+    "id": "AI4",
+    "provider": "codex_cli",
+    "model": null,
+    "role": "independent_final_judge",
+    "enabled": true,
+    "instructions": "Independently weigh evidence and risks; do not count analyst votes. You may reject all candidates. SELECT means monitor a paper entry, never authorize a simulated fill. Give a bounded validity and explicit conditions.",
+    "timeout_seconds": 60,
+    "max_retries": 0,
+    "max_prompt_chars": 30000,
+    "max_answer_chars": 10000
+  },
+  "max_debate_rounds": 1,
+  "max_candidates_per_cycle": 3,
+  "max_calls_per_day": 40,
+  "max_estimated_tokens_per_day": 200000,
+  "max_evidence_age_seconds": 300,
+  "max_decision_valid_seconds": 180,
+  "poll_seconds": 30
+}

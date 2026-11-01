@@ -251,7 +251,7 @@ def parse_spark(text_or_doc, wanted=None):
         ysym = item.get("symbol") or metadata.get("symbol") or ""
         ysym = str(ysym).upper()
         actual = str(metadata.get("symbol") or "").upper()
-        if actual and actual != ysym:
+        if not actual or actual != ysym:
             continue
         if wanted is not None and ysym not in wanted:
             continue
@@ -682,54 +682,89 @@ def progress(a, msg):
         print(msg, file=sys.stderr)
 
 
-def fetch_spark(symbols, rng, interval, pause, a=None, day=None):
-    """Batches of 20. -> ({SYM: series}, {SYM: error})."""
+def fetch_spark(symbols, rng, interval, pause, a=None, day=None, manager=None):
+    """Fetch chart series in provider order; batch only the final Yahoo fallback."""
     data, failed = {}, {}
-    batches = [symbols[i:i + SPARK_MAX] for i in range(0, len(symbols), SPARK_MAX)]
+    unresolved = list(symbols)
+    if interval == "1d":
+        from .market_data_manager import MarketDataManager, FeedUnavailable
+        manager = manager or MarketDataManager()
+        unresolved = []
+        for i, sym in enumerate(symbols):
+            if i and pause:
+                SLEEP(pause)
+            try:
+                fetched = manager.fetch_daily(sym, end_day=day)
+                rows = fetched["bars"]
+                stamps = [int(datetime.datetime.combine(datetime.date.fromisoformat(row["date"]),
+                          datetime.time(15, 30), IST).timestamp()) for row in rows]
+                data[sym] = {"t": stamps, "o": [row["open"] for row in rows],
+                             "h": [row["high"] for row in rows],
+                             "l": [row["low"] for row in rows],
+                             "c": [row["close"] for row in rows],
+                             "v": [row["volume"] for row in rows],
+                             "meta": {"symbol": sym, "currency": "INR",
+                                      "data_provider": fetched["source"],
+                                      "regularMarketTime": stamps[-1]}}
+            except (FeedUnavailable, OSError, ValueError, TypeError, KeyError, ScanError):
+                unresolved.append(sym)
+    if interval == "5m" and (os.environ.get("UPSTOX_ANALYTICS_TOKEN") or
+                             os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN")):
+        from .market_data_manager import MarketDataManager, FeedUnavailable
+        from .intraday_sources import _bars_chart
+        manager = manager or MarketDataManager()
+        unresolved = []
+        for i, sym in enumerate(symbols):
+            if i and pause:
+                SLEEP(pause)
+            try:
+                fetched = manager.fetch_candles(sym, rng, interval=5, end_day=day,
+                                                allow_yahoo=False)
+                raw, _ = _bars_chart(sym, fetched["bars"], 5, fetched["source"])
+                series = parse_chart(raw, sym)
+                series["meta"]["data_provider"] = fetched["source"]
+                series["meta"]["entry_ready"] = fetched["entry_ready"]
+                data[sym] = series
+            except (FeedUnavailable, OSError, ValueError, TypeError, KeyError, ScanError):
+                unresolved.append(sym)
+    batches = [unresolved[i:i + SPARK_MAX] for i in range(0, len(unresolved), SPARK_MAX)]
+    retried = 0
+    retry_cap = getattr(a, "max_source_fallback", 0) if a is not None else 0
     for k, batch in enumerate(batches):
         if k and pause:
             SLEEP(pause)
         wanted = {to_yahoo(s): s for s in batch}
         try:
             got = parse_spark(yahoo_get(spark_path(batch, rng, interval)), wanted)
-        except (ScanError, ValueError) as e:
-            for s in batch:
-                failed[s] = str(e)
-            continue
-        for s in batch:
-            if s in got:
-                data[s] = got[s]
-            else:
-                failed[s] = "no data from Yahoo"
+        except (ScanError, ValueError, OSError):
+            got = {}
+        for sym in batch:
+            if sym in got:
+                series = got[sym]
+                series.setdefault("meta", {})["data_provider"] = "Yahoo Finance unofficial"
+                series["meta"]["entry_ready"] = False
+                data[sym] = series
+                if manager is not None:
+                    manager._selected(sym, "YAHOO", manager.now or datetime.datetime.now(IST),
+                                      capability="daily" if interval == "1d" else "candles")
+                continue
+            # A failed batch must not bypass the final per-symbol Yahoo attempt.
+            if retry_cap and retried >= retry_cap:
+                failed[sym] = "Yahoo chart retry limit reached after batch gap"
+                continue
+            retried += 1
+            try:
+                series = parse_chart(yahoo_get(chart_path(sym, rng, interval)), sym)
+                series["meta"]["data_provider"] = "Yahoo Finance unofficial"
+                series["meta"]["entry_ready"] = False
+                data[sym] = series
+                if manager is not None:
+                    manager._selected(sym, "YAHOO", manager.now or datetime.datetime.now(IST),
+                                      capability="daily" if interval == "1d" else "candles")
+            except (ScanError, ValueError, OSError) as exc:
+                failed[sym] = "no validated chart from any configured provider: " + type(exc).__name__
         if a is not None and len(batches) > 25 and (k + 1) % 50 == 0:
-            progress(a, "  spark %d of %d requests" % (k + 1, len(batches)))
-    if interval == "5m" and a is not None and failed and (
-            os.environ.get("UPSTOX_ANALYTICS_TOKEN") or
-            (os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"))):
-        missing = [s for s in symbols if s in failed]
-        cap = getattr(a, "max_source_fallback", 0)
-        if cap:
-            missing = missing[:cap]
-        for sym in missing:
-            if pause:
-                SLEEP(pause)
-            for provider in ("upstox", "fyers"):
-                if provider == "upstox" and not os.environ.get("UPSTOX_ANALYTICS_TOKEN"):
-                    continue
-                if provider == "fyers" and (not sym.endswith(".NS") or not os.environ.get("FYERS_APP_ID") or
-                                            not os.environ.get("FYERS_ACCESS_TOKEN")):
-                    continue
-                try:
-                    from .intraday_sources import upstox_chart, fyers_chart
-                    raw, label = (upstox_chart if provider == "upstox" else fyers_chart)(
-                        sym, range_=rng, interval=5, end_day=day)
-                    series = parse_chart(raw, sym)
-                    series["meta"]["data_provider"] = label
-                    data[sym] = series
-                    failed.pop(sym, None)
-                    break
-                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
-                    failed[sym] = provider + " stage-one fallback failed: " + type(exc).__name__
+            progress(a, "  Yahoo fallback batch %d of %d" % (k + 1, len(batches)))
     return data, failed
 
 
@@ -858,8 +893,8 @@ def cmd_daily(a):
         offline_syms = sorted(set(data) | set(failed))
     symbols = read_symbols(a, offline_syms)
     if not a.offline:
-        progress(a, "Fetching daily closes for %s symbols (%d spark requests)..."
-                 % ("{:,}".format(len(symbols)), (len(symbols) + SPARK_MAX - 1) // SPARK_MAX))
+        progress(a, "Fetching completed daily data for %s symbols; Upstox, FYERS, NSE, then Yahoo..."
+                 % "{:,}".format(len(symbols)))
         data, failed = fetch_spark(symbols, "3mo", "1d", a.pause, a)
     hits, counts, last_date = scan_daily(data, symbols, now, a.min_price, a.min_volume)
     nfailed = len(symbols) - counts["fetched"]
@@ -868,7 +903,11 @@ def cmd_daily(a):
            "as_of": as_of, "universe": len(symbols), "scanned": counts["scanned"], "failed": nfailed,
            "status": "NO_USABLE_CHARTS" if not counts["scanned"] else
                      ("PARTIAL" if nfailed or counts.get("stale_scanned") else "OK"),
-           "source": "offline Yahoo fixture" if a.offline else "Yahoo Finance unofficial",
+           "source": "offline Yahoo fixture" if a.offline else
+                     "Upstox, FYERS, NSE final Bhavcopy, Yahoo unofficial fallback",
+           "provider_counts": {provider: sum(1 for series in data.values()
+                                              if provider in series.get("meta", {}).get("data_provider", ""))
+                               for provider in ("Upstox", "FYERS", "NSE", "Yahoo")},
            "exchange_counts": exchange_counts(symbols),
            "filters": {"min_price": a.min_price, "min_volume": a.min_volume},
            "note": NOTE, "hits": hits}
@@ -880,7 +919,7 @@ def cmd_daily(a):
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
     local = to_ist(now)
-    print("Daily scan, %s IST, closes through %s (unofficial Yahoo spark, daily closes only)." % (
+    print("Daily scan, %s IST, closes through %s (completed daily research data)." % (
         local.strftime("%a %Y-%m-%d %H:%M"), last_date.isoformat() if last_date else "nothing"))
     print("Fetched %s of %s charts%s. %s passed the liquidity filter (INR %s+ and %s+ shares)%s; "
           "%s scanned." % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
@@ -935,13 +974,16 @@ def cmd_orb(a):
     confirm = None
     confirmation_source = {}
     if not a.offline:
+        from .market_data_manager import MarketDataManager, FeedUnavailable
+        from .intraday_sources import _bars_chart
+        manager = MarketDataManager()
         today = to_ist(parse_now(None)).date()
         if (today - day).days > 6:
             raise ScanError("Yahoo's free 5-minute history is short: replay %s with --offline" % day.isoformat())
         rng = "1d" if day == today else "5d"
-        progress(a, "Stage 1: 5-minute closes for %s symbols (%d spark requests)..."
-                 % ("{:,}".format(len(symbols)), (len(symbols) + SPARK_MAX - 1) // SPARK_MAX))
-        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a, day)
+        progress(a, "Stage 1: five-minute charts for %s symbols; Upstox, FYERS, then Yahoo fallback..."
+                 % "{:,}".format(len(symbols)))
+        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a, day, manager)
         done = []
 
         def confirm(sym):
@@ -950,26 +992,20 @@ def cmd_orb(a):
             done.append(sym)
             if len(done) % 50 == 0:
                 progress(a, "  stage 2: %d v8 charts so far" % len(done))
-            if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
-                try:
-                    from .intraday_sources import upstox_chart
-                    raw, source = upstox_chart(sym, range_=rng, interval=BAR_MIN, end_day=day)
-                    result = parse_chart(raw, sym)
-                    confirmation_source[sym] = source
-                    return result
-                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
-                    confirmation_source[sym] = "Yahoo fallback (Upstox " + type(exc).__name__ + ")"
-            if sym.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
-                try:
-                    from .intraday_sources import fyers_chart
-                    raw, source = fyers_chart(sym, range_=rng, interval=BAR_MIN, end_day=day)
-                    result = parse_chart(raw, sym)
-                    confirmation_source[sym] = source
-                    return result
-                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
-                    confirmation_source[sym] = "Yahoo fallback (FYERS " + type(exc).__name__ + ")"
-            confirmation_source.setdefault(sym, "Yahoo Finance unofficial")
-            return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN)), sym)
+            stage_one = data.get(sym)
+            if stage_one and stage_one.get("meta", {}).get("data_provider", "").startswith(("Upstox", "FYERS")):
+                confirmation_source[sym] = stage_one["meta"]["data_provider"]
+                return stage_one
+            try:
+                fetched = manager.fetch_candles(sym, rng, interval=BAR_MIN, end_day=day,
+                                                allow_yahoo=False)
+                raw, _ = _bars_chart(sym, fetched["bars"], BAR_MIN, fetched["source"])
+                result = parse_chart(raw, sym)
+                confirmation_source[sym] = fetched["source"]
+                return result
+            except (FeedUnavailable, OSError, ValueError, TypeError, KeyError, ScanError):
+                confirmation_source[sym] = "Yahoo Finance unofficial fallback"
+                return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN)), sym)
     hits, counts, failed2 = scan_orb(data, symbols, day, cutoff, a.or_minutes, a.min_price, a.min_volume, confirm,
                                      a.max_confirm)
     if confirmation_source:
@@ -989,11 +1025,7 @@ def cmd_orb(a):
            "status": "NO_USABLE_CHARTS" if not counts["scanned"] else
                      ("PARTIAL" if nfailed or counts["unconfirmed"] or counts["unusable"] else "OK"),
            "source": "offline Yahoo fixture" if a.offline else
-                     ("Yahoo stage-one spark with optional Upstox/FYERS recovery; "
-                      "Upstox/FYERS optional stage-two charts, Yahoo fallback"
-                      if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip() or
-                      (os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"))
-                      else "Yahoo Finance unofficial"),
+                     "Upstox primary, FYERS secondary, NSE five-minute unavailable, Yahoo unofficial fallback",
            "exchange_counts": exchange_counts(symbols),
            "calendar_source": "NSE built-in 2026 holidays plus fresh public NSE calendar; "
                               "special sessions fail closed; BSE sessions not verified for ORB",
@@ -1081,7 +1113,7 @@ def main(argv=None):
     p.add_argument("--max-confirm", type=int, default=MAX_CONFIRM,
                    help="v8 charts to fetch in stage 2, most traded first (%d; 0 = all)" % MAX_CONFIRM)
     p.add_argument("--max-source-fallback", type=int, default=0,
-                   help="limit per-symbol Upstox/FYERS stage-one recovery (0 = all missing charts)")
+                   help="limit per-symbol Yahoo chart retries after batch gaps (0 = all missing charts)")
     p.add_argument("--at", help="cut the clock at this India time, HH:MM")
     p.add_argument("--until", help="no new entries after HH:MM (default: config no_entries_after, 15:10)")
     p.add_argument("--config", default="trader/config.json")

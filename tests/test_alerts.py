@@ -26,19 +26,19 @@ def chart(ticker="RELIANCE.NS", price=94, prev=100, when=None, currency="INR"):
 
 
 class AlertTests(unittest.TestCase):
-    def test_upstox_quote_then_labeled_yahoo_fallback(self):
+    def test_online_alerts_use_shared_quote_priority_and_label_fallback(self):
         good = {"ticker": "RELIANCE.NS", "price": 100, "prev_close": 99,
-                "time": NOW.isoformat(), "source": "Upstox read-only", "currency": "INR"}
-        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
-                patch("india_trader.intraday_sources.upstox_quote", return_value=good), \
-                patch("india_trader.alerts.yahoo_get") as yahoo:
+                "time": NOW.isoformat(), "source": "Upstox read-only", "currency": "INR",
+                "attempts": []}
+        with patch("india_trader.market_data_manager.MarketDataManager.fetch_quote",
+                   return_value=good):
             quotes, errors = a.quotes_for(["RELIANCE.NS"])
         self.assertFalse(errors)
         self.assertEqual(quotes["RELIANCE.NS"]["source"], "Upstox read-only")
-        yahoo.assert_not_called()
-        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
-                patch("india_trader.intraday_sources.upstox_quote", side_effect=ValueError("test")), \
-                patch("india_trader.alerts.yahoo_get", return_value=chart()):
+        fallback = {**good, "source": "Yahoo Finance unofficial completed-candle close",
+                    "attempts": [{"source": "UPSTOX", "status": "FAILED", "reason": "OUTAGE"}]}
+        with patch("india_trader.market_data_manager.MarketDataManager.fetch_quote",
+                   return_value=fallback):
             quotes, errors = a.quotes_for(["RELIANCE.NS"])
         self.assertFalse(errors)
         self.assertIn("Yahoo", quotes["RELIANCE.NS"]["source"])

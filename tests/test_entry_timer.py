@@ -40,6 +40,14 @@ def at(hm):
     return datetime.fromisoformat("2026-10-28T" + hm + ("" if hm.count(":") == 2 else ":00") + "+05:30")
 
 
+def candle_rows():
+    payload = json.loads(chart())["chart"]["result"][0]
+    quote = payload["indicators"]["quote"][0]
+    return [{"timestamp": datetime.fromtimestamp(ts, IST).isoformat(),
+             **{field: quote[field][i] for field in ("open", "high", "low", "close", "volume")}}
+            for i, ts in enumerate(payload["timestamp"])]
+
+
 class EntryTimerTests(unittest.TestCase):
     def test_first_completed_orb_close_and_exit_handoff(self):
         c = e.parse_chart(chart(), "RELIANCE.NS", "5m")
@@ -149,14 +157,15 @@ class EntryTimerTests(unittest.TestCase):
     def test_configured_upstox_precedes_yahoo_and_labels_fallback(self):
         day = datetime(2026, 10, 28, tzinfo=IST).date()
         with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
-                patch("india_trader.intraday_sources.upstox_chart", return_value=(chart(), "Upstox read-only")) as up, \
+                patch("india_trader.intraday_sources.upstox_instrument", return_value="INE002A01018"), \
+                patch("india_trader.intraday_sources.upstox_bars", return_value=candle_rows()) as up, \
                 patch("india_trader.entry_timer._fetch_yahoo") as yahoo:
             result = e.get_chart("RELIANCE.NS", "5m", day)
-        self.assertEqual(result["source"], "Upstox read-only")
+        self.assertIn("Upstox", result["source"])
         up.assert_called_once()
         yahoo.assert_not_called()
         with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
-                patch("india_trader.intraday_sources.upstox_chart", side_effect=ValueError("test")), \
+                patch("india_trader.intraday_sources.upstox_instrument", side_effect=ValueError("test")), \
                 patch("india_trader.entry_timer._fetch_yahoo", return_value=chart()):
             result = e.get_chart("RELIANCE.NS", "5m", day)
         self.assertIn("Yahoo", result["source"])
@@ -166,12 +175,12 @@ class EntryTimerTests(unittest.TestCase):
         day = datetime(2026, 10, 28, tzinfo=IST).date()
         with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token",
                                     "FYERS_APP_ID": "APP-100", "FYERS_ACCESS_TOKEN": "test-token"}), \
-                patch("india_trader.intraday_sources.upstox_chart", side_effect=ValueError("test")), \
-                patch("india_trader.intraday_sources.fyers_chart", return_value=(chart(), "FYERS read-only")) as fyers, \
+                patch("india_trader.intraday_sources.upstox_instrument", side_effect=ValueError("test")), \
+                patch("india_trader.intraday_sources.fyers_bars", return_value=candle_rows()) as fyers, \
                 patch("india_trader.entry_timer._fetch_yahoo") as yahoo:
             result = e.get_chart("RELIANCE.NS", "5m", day)
-        self.assertEqual(result["source"], "FYERS read-only")
-        self.assertEqual(result["provider_attempts"][0]["source"], "Upstox")
+        self.assertIn("FYERS", result["source"])
+        self.assertEqual(result["provider_attempts"][0]["source"], "UPSTOX")
         fyers.assert_called_once()
         yahoo.assert_not_called()
 

@@ -8,7 +8,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from functools import lru_cache
 
 from .core import IST, DataError, parse_bars, symbol
@@ -102,6 +102,10 @@ def upstox_bars(ticker: str, isin: str, token: str, range_: str = "5d",
         try:
             for row in _upstox_get(url, token, interval):
                 by_time[row["timestamp"]] = row
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403, 429):
+                raise
+            errors.append(type(exc).__name__)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
             errors.append(type(exc).__name__)
         historical_end = chunk_start - timedelta(days=1)
@@ -110,6 +114,10 @@ def upstox_bars(ticker: str, isin: str, token: str, range_: str = "5d",
         try:
             for row in _upstox_get(url, token, interval):
                 by_time[row["timestamp"]] = row
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403, 429):
+                raise
+            errors.append(type(exc).__name__)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
             errors.append(type(exc).__name__)
     if errors and range_ != "1d":
@@ -236,43 +244,229 @@ def upstox_quote(ticker, token=None):
         item = match[0]
         price = float(item["last_price"])
         previous = float(item["prev_close_price"])
+        depth = item.get("depth") or {}
+        buys = depth.get("buy") or [] if isinstance(depth, dict) else []
+        sells = depth.get("sell") or [] if isinstance(depth, dict) else []
+        bid = float(buys[0]["price"]) if buys else None
+        ask = float(sells[0]["price"]) if sells else None
         milliseconds = int(item["last_trade_time"])
         stamp = datetime.fromtimestamp(milliseconds / 1000, IST)
         if not math.isfinite(price) or not math.isfinite(previous) or price <= 0 or previous <= 0:
             raise ValueError("invalid INR quote")
+        if (bid is None) != (ask is None) or bid is not None and (
+                not all(math.isfinite(x) and x > 0 for x in (bid, ask)) or ask < bid):
+            raise ValueError("invalid bid/ask depth")
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
         raise DataError("unusable Upstox quote for requested equity") from exc
     return {"ticker": ticker, "price": price, "prev_close": previous,
-            "time": stamp.isoformat(), "source": "Upstox Analytics Token read-only quote", "currency": "INR"}
+            "time": stamp.isoformat(), "source": "Upstox Analytics Token read-only quote", "currency": "INR",
+            "bid": bid, "ask": ask}
+
+
+def fyers_quote(ticker, app_id=None, token=None):
+    """Read one FYERS v3 data quote; reject missing identity or trade time."""
+    if not ticker.endswith(".NS") or symbol(ticker, "NSE") != ticker:
+        raise DataError("FYERS quotes support NSE cash equities only")
+    app_id = app_id or os.environ.get("FYERS_APP_ID", "").strip()
+    token = token or os.environ.get("FYERS_ACCESS_TOKEN", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,30}", app_id or "") or \
+            not token or any(c.isspace() for c in token):
+        raise DataError("FYERS data credentials are unavailable")
+    requested = "NSE:" + ticker[:-3] + "-EQ"
+    url = "https://api-t1.fyers.in/data/quotes?" + urllib.parse.urlencode({"symbols": requested})
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "Authorization": app_id + ":" + token})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise DataError("FYERS quote response exceeds size limit")
+    try:
+        doc = json.loads(raw)
+        items = doc["d"]
+        if doc.get("s") != "ok" or not isinstance(items, list) or len(items) != 1:
+            raise ValueError("unexpected quote count")
+        item = items[0]
+        if not isinstance(item, dict) or item.get("n") != requested or not isinstance(item.get("v"), dict):
+            raise ValueError("FYERS symbol mismatch")
+        values = item["v"]
+        price = float(values["lp"])
+        previous = float(values["prev_close_price"])
+        bid = float(values["bid"]) if values.get("bid") is not None else None
+        ask = float(values["ask"]) if values.get("ask") is not None else None
+        raw_time = float(values["tt"])
+        if not all(math.isfinite(x) and x > 0 for x in (price, previous, raw_time)):
+            raise ValueError("invalid quote values")
+        if (bid is None) != (ask is None) or bid is not None and (
+                not all(math.isfinite(x) and x > 0 for x in (bid, ask)) or ask < bid):
+            raise ValueError("invalid bid/ask quote")
+        stamp = datetime.fromtimestamp(raw_time / (1000 if raw_time > 1e11 else 1), IST)
+    except (ValueError, KeyError, TypeError, OverflowError, OSError) as exc:
+        raise DataError("unusable FYERS quote for requested equity") from exc
+    return {"ticker": ticker, "price": price, "prev_close": previous,
+            "time": stamp.isoformat(), "source": "FYERS read-only data quote", "currency": "INR",
+            "bid": bid, "ask": ask}
+
+
+def upstox_market_status(exchange="NSE", token=None):
+    """Read the official exchange-status endpoint; only NORMAL_OPEN is open."""
+    if exchange not in ("NSE", "BSE"):
+        raise DataError("unsupported cash-equity exchange")
+    token = token or os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip()
+    if not token or any(c.isspace() for c in token):
+        raise DataError("Upstox data token unavailable")
+    req = urllib.request.Request("https://api.upstox.com/v2/market/status/" + exchange,
+                                 headers={"Accept": "application/json", "Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise DataError("Upstox market-status response exceeds size limit")
+    try:
+        doc = json.loads(raw)
+        data = doc["data"]
+        if doc.get("status") != "success" or data["exchange"] != exchange:
+            raise ValueError("exchange status identity mismatch")
+        state = data["status"]
+        if not isinstance(state, str):
+            raise ValueError("invalid exchange status")
+        cas = data.get("cas_eligible_status") or {}
+        cas_state = cas.get("status") if isinstance(cas, dict) else None
+        updated = datetime.fromtimestamp(int(data["last_updated"]) / 1000, IST)
+    except (ValueError, TypeError, KeyError, OverflowError, OSError) as exc:
+        raise DataError("unusable Upstox exchange status") from exc
+    return {"exchange": exchange, "state": state, "open": state == "NORMAL_OPEN" and
+            cas_state not in ("CTS_CLOSE", "CAS_LM_START", "CAS_M_STOP", "CAS_STOP"),
+            "updated_at": updated.isoformat(), "source": "Upstox exchange status"}
+
+
+def fyers_market_status(exchange="NSE", app_id=None, token=None):
+    """Read FYERS normal cash-market state, rejecting ambiguous segments."""
+    if exchange != "NSE":
+        raise DataError("FYERS market-status adapter supports NSE cash only")
+    app_id = app_id or os.environ.get("FYERS_APP_ID", "").strip()
+    token = token or os.environ.get("FYERS_ACCESS_TOKEN", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,30}", app_id or "") or \
+            not token or any(c.isspace() for c in token):
+        raise DataError("FYERS data credentials unavailable")
+    req = urllib.request.Request("https://api-t1.fyers.in/data/marketStatus",
+                                 headers={"Accept": "application/json",
+                                          "Authorization": app_id + ":" + token})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise DataError("FYERS market-status response exceeds size limit")
+    try:
+        doc = json.loads(raw)
+        states = doc["marketStatus"]
+        if doc.get("s") != "ok" or not isinstance(states, list):
+            raise ValueError("invalid market-status envelope")
+        matches = [row for row in states if isinstance(row, dict) and
+                   row.get("exchange") == "NSE" and row.get("segment") in ("EQ", "CM", "NSE_EQ") and
+                   row.get("market_type") == "NORMAL"]
+        if len(matches) != 1 or not isinstance(matches[0].get("status"), str):
+            raise ValueError("ambiguous normal cash-market status")
+        state = matches[0]["status"]
+    except (ValueError, TypeError, KeyError) as exc:
+        raise DataError("unusable FYERS cash-market status") from exc
+    return {"exchange": exchange, "state": state, "open": state == "OPEN",
+            "source": "FYERS normal cash-market status"}
+
+
+def _daily_rows(rows):
+    result = {}
+    if not isinstance(rows, list):
+        raise DataError("daily candle list is unavailable")
+    for candle in rows:
+        if not isinstance(candle, list) or len(candle) < 6:
+            raise DataError("daily candle has invalid shape")
+        try:
+            raw = candle[0]
+            at = (datetime.fromtimestamp(float(raw), IST) if isinstance(raw, (int, float))
+                  else datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+            if at.tzinfo is None:
+                if isinstance(raw, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+                    at = at.replace(tzinfo=IST)
+                else:
+                    raise ValueError("daily timestamp lacks timezone")
+            day = at.astimezone(IST).date()
+            o, h, l, c, v = (float(value) for value in candle[1:6])
+            if not all(math.isfinite(x) for x in (o, h, l, c, v)) or \
+                    l <= 0 or l > min(o, c) or h < max(o, c) or v < 0:
+                raise ValueError("invalid daily OHLCV")
+        except (ValueError, TypeError, OverflowError, OSError) as exc:
+            raise DataError("invalid daily candle values") from exc
+        if day in result:
+            raise DataError("duplicate daily candle")
+        result[day] = {"date": day.isoformat(), "open": o, "high": h,
+                       "low": l, "close": c, "volume": v}
+    return [result[day] for day in sorted(result)]
+
+
+def upstox_daily_bars(ticker, isin, token, end_day=None):
+    """Read completed daily V3 bars for one cash equity (roughly three months)."""
+    if not ticker.endswith((".NS", ".BO")) or not token or \
+            not re.fullmatch(r"IN[A-Z0-9]{10}", isin or ""):
+        raise DataError("Upstox daily request needs an equity and read-only token")
+    end = end_day or datetime.now(IST).date()
+    if isinstance(end, str):
+        end = datetime.fromisoformat(end).date()
+    if end > datetime.now(IST).date():
+        raise DataError("daily date cannot be in the future")
+    if end == datetime.now(IST).date() and datetime.now(IST).time() < time(15, 30):
+        end -= timedelta(days=1)
+    segment = "NSE_EQ" if ticker.endswith(".NS") else "BSE_EQ"
+    key = urllib.parse.quote(segment + "|" + isin, safe="")
+    start = end - timedelta(days=105)
+    url = f"{UPSTOX}/{key}/days/1/{end.isoformat()}/{start.isoformat()}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise DataError("Upstox daily response exceeds size limit")
+    try:
+        doc = json.loads(raw)
+        if doc.get("status") != "success":
+            raise ValueError("daily API failed")
+        return _daily_rows(doc["data"]["candles"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise DataError("unusable Upstox daily candles") from exc
+
+
+def fyers_daily_bars(ticker, app_id, token, end_day=None):
+    """Read FYERS completed daily NSE cash candles, without order APIs."""
+    if not ticker.endswith(".NS") or symbol(ticker, "NSE") != ticker:
+        raise DataError("FYERS daily candles support NSE EQ only")
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,30}", app_id or "") or \
+            not token or any(c.isspace() for c in token):
+        raise DataError("FYERS data credentials unavailable")
+    end = end_day or datetime.now(IST).date()
+    if isinstance(end, str):
+        end = datetime.fromisoformat(end).date()
+    if end > datetime.now(IST).date():
+        raise DataError("daily date cannot be in the future")
+    if end == datetime.now(IST).date() and datetime.now(IST).time() < time(15, 30):
+        end -= timedelta(days=1)
+    start = end - timedelta(days=105)
+    params = {"symbol": "NSE:" + ticker[:-3] + "-EQ", "resolution": "D",
+              "date_format": "1", "range_from": start.isoformat(),
+              "range_to": end.isoformat(), "cont_flag": "0"}
+    url = "https://api-t1.fyers.in/data/history?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "Authorization": app_id + ":" + token})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        raw = response.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise DataError("FYERS daily response exceeds size limit")
+    try:
+        doc = json.loads(raw)
+        if doc.get("s") != "ok":
+            raise ValueError("daily API failed")
+        return _daily_rows(doc["candles"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise DataError("unusable FYERS daily candles") from exc
 
 
 def fetch_preferred(ticker: str, range_: str = "5d") -> dict:
-    """Try configured read-only Upstox, then unofficial Yahoo. Never mix bars."""
-    attempts = []
-    token = os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip()
-    if token and ticker.endswith((".NS", ".BO")):
-        try:
-            isin = upstox_instrument(ticker)
-            bars = upstox_bars(ticker, isin, token, range_)
-            return {"source": "Upstox Analytics Token read-only candles", "bars": bars,
-                    "attempts": attempts, "exchange_verified": False}
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
-            attempts.append({"source": "Upstox", "status": "FAILED", "reason": type(exc).__name__})
-    else:
-        attempts.append({"source": "Upstox", "status": "NOT_CONFIGURED"})
-    if ticker.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
-        try:
-            bars = fyers_bars(ticker, os.environ["FYERS_APP_ID"], os.environ["FYERS_ACCESS_TOKEN"], range_)
-            return {"source": "FYERS read-only historical candles", "bars": bars,
-                    "attempts": attempts, "exchange_verified": False}
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
-            attempts.append({"source": "FYERS", "status": "FAILED", "reason": type(exc).__name__})
-    else:
-        attempts.append({"source": "FYERS", "status": "NOT_CONFIGURED"})
-    try:
-        bars = yahoo_bars(ticker, range_=range_)
-        return {"source": "Yahoo Finance unofficial five-minute candles", "bars": bars,
-                "attempts": attempts, "exchange_verified": False}
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
-        attempts.append({"source": "Yahoo", "status": "FAILED", "reason": type(exc).__name__})
-        raise DataError("All configured five-minute candle sources failed") from exc
+    """Read-only five-minute research through the shared provider policy."""
+    from .market_data_manager import fetch_candles
+    return fetch_candles(ticker, range_)

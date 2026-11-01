@@ -1,6 +1,7 @@
 """python -m india_trader --help"""
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from .core import DataError, IST, orb_signal, plan, read_csv, read_json_bars, save_json, symbol
@@ -27,6 +28,11 @@ from . import earnings_analyst
 from . import insider_tracker
 from . import calendar_source
 from . import paper_monitor
+from . import market_engine
+from . import ai_committee
+from . import paper_lifecycle
+from . import web_api
+from . import deployment
 
 
 def attach_bars(p, symbol_optional=False):
@@ -76,6 +82,16 @@ def main(argv=None):
         return calendar_source.main(argv[1:])
     if argv and argv[0] == "paper-monitor":
         return paper_monitor.main(argv[1:])
+    if argv and argv[0] == "market-engine":
+        return market_engine.main(argv[1:])
+    if argv and argv[0] == "ai-committee":
+        return ai_committee.main(argv[1:])
+    if argv and argv[0] == "paper-lifecycle":
+        return paper_lifecycle.main(argv[1:])
+    if argv and argv[0] == "web":
+        return web_api.main(argv[1:])
+    if argv and argv[0] == "deploy":
+        return deployment.main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m india_trader", description="NSE/BSE cash-equity research; PAPER ONLY")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scanner", help="Full NSE EQ universe, daily setup, and marketwide ORB scanner")
@@ -91,7 +107,12 @@ def main(argv=None):
     sub.add_parser("insider-tracker", help="Public NSE insider disclosures, once-only alerts and XBRL transactions")
     sub.add_parser("market-calendar", help="Refresh public NSE/BSE holiday data and inspect session status")
     sub.add_parser("paper-monitor", help="Scheduled foreground paper alerts, news, earnings and insider checks")
-    f = sub.add_parser("fetch", help="Fetch 5-minute bars: read-only Upstox if configured, then Yahoo")
+    sub.add_parser("market-engine", help="Continuous foreground NSE scanner and multi-stock paper candidate monitor")
+    sub.add_parser("ai-committee", help="Paper-only analyst debate and independent AI4 judgment of verified candidates")
+    sub.add_parser("paper-lifecycle", help="Autonomous local paper entry, risk, simulated fills and independent exits")
+    sub.add_parser("web", help="Authenticated local mobile paper dashboard")
+    sub.add_parser("deploy", help="Private Linux paper services, health and checked backups")
+    f = sub.add_parser("fetch", help="Fetch validated 5-minute research bars in provider priority order")
     f.add_argument("symbol")
     f.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
     f.add_argument("--range", choices=("1d", "5d", "1mo"), default="5d")
@@ -128,6 +149,7 @@ def main(argv=None):
     sc.add_argument("--out")
     d = sub.add_parser("doctor", help="Runtime self-check, no network")
     d.add_argument("--out")
+    sub.add_parser("data-status", help="Show configured read-only data sources and local health; no network")
     pc = sub.add_parser("paper-cycle", help="Fetch a short watchlist and make paper-only research plans")
     pc.add_argument("--watchlist", required=True)
     pc.add_argument("--as-of", help="Offset-aware cutoff time (default: current IST time)")
@@ -199,9 +221,22 @@ def main(argv=None):
             s = symbol(args.symbol, args.exchange)
             fetched = fetch_preferred(s, range_=args.range)
             rows = fetched["bars"]
-            result = {"source":fetched["source"], "provider_attempts":fetched["attempts"],
+            result = {"source":fetched["source"], "provider":fetched["provider"],
+                      "provider_attempts":fetched["attempts"], "quality":fetched["quality"],
+                      "entry_ready":fetched["entry_ready"],
                       "mode":"RESEARCH_ONLY", "ticker":s, "bar_interval":"5m",
-                      "fetched_at":datetime.now(IST).isoformat(), "count":len(rows), "bars":rows}
+                      "fetched_at":datetime.now(IST).isoformat(), "count":len(rows),
+                      "orders_possible":False, "bars":rows}
+        elif args.cmd == "data-status":
+            from .market_data_manager import DEFAULT_AUDIT, PROVIDER_ORDER, provider_health
+            result = {"mode": "READ_ONLY", "provider_priority": PROVIDER_ORDER,
+                      "configured": {"UPSTOX": bool(os.environ.get("UPSTOX_ANALYTICS_TOKEN")),
+                                     "FYERS": bool(os.environ.get("FYERS_APP_ID") and
+                                                   os.environ.get("FYERS_ACCESS_TOKEN")),
+                                     "NSE_PUBLIC": True, "YAHOO_UNOFFICIAL": True},
+                      "health_this_process": provider_health(),
+                      "audit_path": str(DEFAULT_AUDIT),
+                      "live_connectivity": "NOT_CHECKED", "orders_possible": False}
         elif args.cmd == "orb":
             rows, source = load_bars(args)
             result = {**orb_signal(rows,args.opening_minutes,args.as_of,args.date), "data_origin":source,
@@ -289,7 +324,8 @@ def main(argv=None):
         else:
             result = {"status":"OK", "python":sys.version.split()[0],
                       "timezone":"UTC+05:30 fixed IST", "orders_possible":False,
-                      "market_data_connectivity":"NOT_CHECKED", "provider":"Upstox/FYERS optional; Yahoo unofficial; live connectivity not tested"}
+                      "market_data_connectivity":"NOT_CHECKED",
+                      "provider":"Upstox, FYERS, eligible NSE, Yahoo; live connectivity not tested"}
         if getattr(args,"out",None) and args.cmd != "universe":
             save_json(args.out,result)
         print(json.dumps(result,indent=2,allow_nan=False,ensure_ascii=False))
