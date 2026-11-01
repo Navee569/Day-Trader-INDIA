@@ -1,0 +1,40 @@
+{
+  "as_of": "2026-11-01T12:00:00+05:30",
+  "mode": "PAPER_RESEARCH_ONLY",
+  "companies": [
+    {
+      "ticker": "HDFCBANK.NS",
+      "name": "HDFC Bank Limited",
+      "basis": "consolidated",
+      "period_end": "2026-09-30",
+      "revenue_ttm_inr": 5063162600000.0,
+      "net_income_ttm_inr": 821245200000.0,
+      "eps_ttm_inr": 51.88,
+      "revenue_growth_yoy_pct": 9.1,
+      "eps_growth_yoy_pct": 5.5,
+      "net_income_growth_yoy_pct": 5.6,
+      "gross_margin_pct": null,
+      "operating_margin_pct": 25.4,
+      "net_margin_pct": 16.0,
+      "source": "NSE filed XBRL",
+      "filing_url": "https://nsearchives.nseindia.com/corporate/xbrl/INTEGRATED_FILING_BANKING_1740913_17102026054812_WEB.xml"
+    },
+    {
+      "ticker": "RELIANCE.NS",
+      "name": "Reliance Industries Limited",
+      "basis": "consolidated",
+      "period_end": "2026-09-30",
+      "revenue_ttm_inr": 12128280000000.0,
+      "net_income_ttm_inr": 950340000000.0,
+      "eps_ttm_inr": 60.68,
+      "revenue_growth_yoy_pct": 28.6,
+      "eps_growth_yoy_pct": 40.7,
+      "net_income_growth_yoy_pct": 32.1,
+      "gross_margin_pct": null,
+      "operating_margin_pct": 12.4,
+      "net_margin_pct": 8.8,
+      "source": "NSE filed XBRL",
+      "filing_url": "https://nsearchives.nseindia.com/corporate/xbrl/INTEGRATED_FILING_INDAS_1750537_30102026093254_WEB.xml"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Day Trader India — ChatGPT + Codex (v0.2.1)
 
-An **independent, defensive Python implementation** inspired by the [MIT-licensed `day-trader-skill` by Jake Schincariol](https://github.com/Jakeschincariol/day-trader-skill). You do **not** need Claude. This archive **does not contain the upstream 11 Claude skills**, does not claim to be a complete port and is **not** a validated profitable strategy.
+An **independent, defensive Python implementation** inspired by the [MIT-licensed `day-trader-skill` by Jake Schincariol](https://github.com/Jakeschincariol/day-trader-skill). You do **not** need Claude. All 11 numbered upstream workflows now have Indian paper-research adaptations, with documented source and execution differences. This is **not** a validated profitable strategy or a live broker system.
 
 **Safety:** paper-only; no broker order connector or autonomous trade execution. An optional locally entered Upstox Analytics Token is read-only market-data access. Do not use Yahoo quotes for live execution. No investment advice.
 
@@ -221,7 +221,7 @@ Upload this ZIP and ask ChatGPT to inspect `SKILL.md` and analyze **your verifie
 
 ## Using Codex (without Claude)
 
-Open the folder in Codex; `AGENTS.md` is the repo policy file. `.agents/skills/india-trader-scanner/SKILL.md` covers the scanner, `.agents/skills/india-trader-news/SKILL.md` covers the news monitor, `.agents/skills/india-trader-entry/SKILL.md` covers the entry timer, `.agents/skills/india-trader-exit/SKILL.md` covers the exit planner, `.agents/skills/india-trader-time-machine/SKILL.md` covers Time Machine, `.agents/skills/india-trader-budget/SKILL.md` covers INR budget sizing, `.agents/skills/india-trader-risk/SKILL.md` covers risk review, `.agents/skills/india-trader-broker/SKILL.md` covers the paper broker ledger, `.agents/skills/india-trader-alerts/SKILL.md` covers paper alerts, and `.agents/skills/india-day-trader/SKILL.md` covers the other paper research commands. Invoke the matching `$india-trader-*` skill for each implemented workflow. Codex uses the Python installed in its environment; make sure your shell can run `python`.
+Open the folder in Codex; `AGENTS.md` is the repo policy file. Each numbered workflow has an India skill in `.agents/skills`, including `india-trader-analyst` and `india-trader-insiders`; `.agents/skills/india-day-trader/SKILL.md` covers the other paper research commands. Invoke the matching `$india-trader-*` skill for each workflow. Codex uses the Python installed in its environment; make sure your shell can run `python`.
 
 ### Time Machine: fifth upstream workflow
 
@@ -260,6 +260,30 @@ Output is readable text by default; `--json` gives the full result. `--source sa
 
 Yahoo query2/query1 quotes are unofficial and can be delayed or unavailable. `quote` prints each market timestamp, age and whether it is fresh enough for an alert. A price rule refuses a missing, future, or more-than-15-minute-old quote; no five-minute candle is inferred from a Bhavcopy or CM Market Live value. The built-in NSE clock knows 2026 normal sessions only; unknown years, holidays and weekends fail closed. BSE hours and special/early sessions remain unverified. The command checks once when run: it does not keep watching, deliver a desktop notification, place a stop order or close a paper holding automatically. A flat-by alert tells the user to check the holding and use the Broker flatten path manually.
 
+### Earnings Analyst: tenth upstream workflow
+
+```powershell
+python -m india_trader earnings-analyst RELIANCE --quarters 8
+python -m india_trader earnings-analyst HDFCBANK --basis consolidated --json
+python -m india_trader earnings-analyst --isin INE002A01018 --metrics trader/metrics.json
+```
+
+The analyst reads official NSE integrated and older financial-result indexes, then parses linked XBRL. It reports INR quarterly revenue or bank total income, net profit, diluted EPS, same-quarter growth, available margins and four-quarter totals. It keeps consolidated and standalone filings separate, uses the latest available revision, and marks a fourth quarter derived from an annual filing as approximate for EPS. Gross margin stays blank when not filed; a non-bank operating margin calculated from profit before exceptional items, finance costs and other income is labeled a **proxy**. It links the source filing and same-cycle NSE PDF release candidates without treating press-release language as filed fact. `--as-of` supports point-in-time replay; `--offline DIR` supports saved index/XBRL fixtures. `--no-filings` skips announcement lookup, and `--metrics` merges a dated JSON summary. [PARITY_AUDIT_10.md](PARITY_AUDIT_10.md) lists each original behavior and its India equivalent.
+
+The public source pages are [NSE Integrated Filing Financials](https://www.nseindia.com/companies-listing/corporate-integrated-filing) and [NSE Financial Results](https://www.nseindia.com/companies-listing/corporate-filings-financial-results). The example [METRICS_INDIA.json](examples/METRICS_INDIA.json) is a dated public NSE filing snapshot, not a current recommendation. Upcoming earnings dates and call transcripts need separate sources. A result released during an overnight paper holding can gap past a planned stop. The analyst does not place or recommend orders.
+
+### Insider Tracker: eleventh upstream workflow
+
+```powershell
+python -m india_trader insider-tracker index --symbol RELIANCE --read
+python -m india_trader insider-tracker new --symbol RELIANCE --read --json
+python -m india_trader insider-tracker fetch current:384 --symbol RELIANCE --json
+```
+
+This reads [NSE's public insider-trading filings](https://www.nseindia.com/companies-listing/corporate-filings-insider-trading) under SEBI PIT Regulation 7(2)/7(3). It combines the current NSE XBRL feed and the older NSE archive, retains original filing links, parses every named transaction context, and shows the person's category, buy/sell/pledge type, instrument, quantity, reported value and unit, trade date range, intimation and disclosure lag. `new` records once-only filing IDs in `trader/state/insider-tracker.json`; `--dry-run` avoids changing state. Use `--member`, `--since`, `--year`, `--type`, `--portfolio`, `--tickers`, `--as-of`, `--offline DIR`, `--current-only`, `--xml-dir`, `--json` and `--limit` as needed. `parse PATH.xml` reads a saved official XBRL file and accepts `--filed` if the filing date is absent from the XML. The named-person search can be slow across the full NSE index because it must read each XBRL file. [PARITY_AUDIT_11.md](PARITY_AUDIT_11.md) maps the original Congress PTR controls to this Indian source.
+
+The old archive's XBRL can label a reported value with a `shares` unit; the tracker preserves that unit rather than presenting the field as verified INR. The lag is calendar days, not a legal late-filing verdict. Public disclosures describe past events and cannot justify a present trade without separate market-data, sizing and risk checks. The available NSE indexes are not a complete BSE or unlimited historical disclosure archive. No order is placed.
+
 ## Implemented vs NOT implemented
 
 | Feature | Current development state |
@@ -281,19 +305,21 @@ Yahoo query2/query1 quotes are unofficial and can be delayed or unavailable. `qu
 | Original risk manager: batch entry checks, fresh-price recomputation, daily limits, exits, exact-order verdicts | Implemented and offline tested for paper NSE/BSE cash research; future/special-session calendar remains unverified |
 | Original broker: exact ticket, per-order yes/no, fill log, local holdings, flatten ticket | Adapted as a paper-only simulation and offline tested; no real broker or exchange fill |
 | Original alerts: market clock, plan stop/target/flat-by, custom price/percent/time/bell rules, once-only state, dated quote file | Adapted to IST/NSE paper checks and offline tested; quote delivery is CLI-only and Yahoo is unofficial |
+| Original earnings analyst: filed quarterly facts, YoY, margins, TTM, Q4 derivation, links, metrics export | Adapted to NSE XBRL and announcement links, with bank-specific fields and missing/derived values labeled |
+| Original Congress-trades tracker: filing index, once-only new alert, detailed transaction parse, owner/date/amount, holdings flag | Adapted to public NSE insider PIT filings and older archive, with XBRL transaction rows and paper-portfolio flag; Indian issuer insiders replace US Congress members |
 | Real-time exchange-approved live market feed | **Not implemented** |
 | Original news monitor: NSE RSS filings, India headlines, price moves, deduplication, state, offline replay | Implemented and offline tested; public RSS horizon is short and filing links can be missing |
-| Financial statement analysis/NLP and complete filing archive | **Not implemented** |
+| Complete financial filing archive, company guidance NLP and automatic transcript retrieval | **Not implemented**; earnings analyst reads available NSE XBRL and links candidate release PDFs |
 | Marketwide sentiment and continuous notification delivery | **Not implemented**; Alerts checks are invoked one run at a time |
 | Indian exchange holiday + Muhurat + special-auction calendar | **Not implemented** |
 | Broker API, order placement, broker fees, tax engine | **Not implemented (safety boundary)** |
-| Original 11 Claude skills, full parity | **Not implemented**; first nine adapted workflows are present |
+| Original 11 numbered workflows | All have India paper adaptations; source, live-broker and legal-timing differences are documented in the parity audits |
 | Graphical UI | **Not implemented** |
 
-**Why not claim full parity?** US SEC/EDGAR, Pelosi disclosures, Alpaca MCP and US-specific trading rules are not Indian market components and cannot be truthfully relabeled as NSE/BSE integrations. Real equivalents require different audited feeds, policies, connectors and independent acceptance tests.
+**Why not claim exact behavior?** US SEC/EDGAR, House Congress disclosures, Alpaca MCP and US-specific trading rules are different from Indian public filings and paper simulation. The eleven workflow controls are adapted, while BSE-only insider coverage, live order execution, continuous alert delivery, and independent source reconciliation still need separate work and acceptance tests.
 
 ## QA and provenance
 
-See `PARITY_AUDIT_1_TO_9.md`, `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. The final test count for this development pass is recorded in `QA_REPORT.md`. NSE daily Bhavcopy, NSE/BSE security masters, Yahoo scanner, Yahoo paper-cycle, and public NSE/India news feed smoke checks ran in earlier passes; Upstox, CM Market Live during market hours, actual order execution and profitability have **not** been validated. The scanner has a built-in 2026 NSE holiday list, but special sessions and future calendars remain unverified. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
+See `PARITY_AUDIT_1_TO_9.md`, `PARITY_AUDIT_10.md`, `PARITY_AUDIT_11.md`, `QA_REPORT.md`, `CHANGELOG.md`, and `TESTER_PROMPT.txt`. The prior v0.2 release passed its original 61 tests but contained independently reproduced validation and replay bugs; the v0.2.1 re-audit passed 79. The complete offline suite now passes **199 tests** on Windows Python 3.11.2. NSE XBRL earnings reads were checked for RELIANCE and HDFCBANK, and both current and archived NSE public insider filings were parsed on 1 November 2026; earlier passes checked NSE daily Bhavcopy, NSE/BSE security masters, Yahoo scanner, Yahoo paper-cycle, and public NSE/India news feeds. Upstox, CM Market Live during market hours, actual order execution and profitability have **not** been validated. The scanner has a built-in 2026 NSE holiday list, but special sessions and future calendars remain unverified. The supplied tests are Python standard-library `unittest`. `python -m compileall -q india_trader` checks syntax. Any mention of a `TRIGGERED_LONG` status means a **completed-bar historical condition** only, not a recommendation or market-order fill.
 
 Sources: [NSE tick-size circular](https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf), [2026 closing-auction timing reference](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/what-are-the-market-timings), [NSE market timings](https://www.nseindia.com/static/market-data/market-timings), [OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills), [upstream project](https://github.com/Jakeschincariol/day-trader-skill).

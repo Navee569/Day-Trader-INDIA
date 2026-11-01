@@ -1,5 +1,17 @@
 # Changelog
 
+## Eleventh workflow — India Insider Tracker, 1 November 2026
+
+- Added `insider-tracker index|new|fetch|parse` for official NSE current and archived public PIT filings. It parses XBRL transaction contexts, names/categories, buy/sell/pledge and derivative fields, quantity, reported value with original unit, trade/intimation dates, disclosure lag, and paper-portfolio matches.
+- Added once-only filing state, first-check 45-day window, dry run, person/symbol/date/type filters, point-in-time cutoff, offline replay, revision links, a Codex skill and a parity audit. The Indian workflow tracks public company-insider filings rather than US Congressional reports. A legal late-filing flag is not inferred from the US rule.
+- The public NSE current and older archive feeds both passed read-only sample checks. All actions remain research-only and paper-only; no broker operation was added.
+
+## Tenth workflow — India Earnings Analyst, 1 November 2026
+
+- Added `earnings-analyst` for public NSE integrated and historical result XBRL. It keeps consolidated and standalone bases separate, honors publication cutoffs and revisions, compares same-quarter prior-year metrics, derives a missing fourth quarter from a complete annual result, and exports four-quarter metrics.
+- Added bank-specific filed total-income, net-profit, diluted-EPS and pre-provision operating-profit mappings. Gross margin remains missing when it is not filed; a non-bank operating-income calculation is labeled as a proxy.
+- Links latest NSE XBRL/iXBRL and matching official announcement PDF candidates. Added a dated RELIANCE/HDFCBANK metrics example, offline regression fixtures, and a dedicated repo-local Codex skill. No broker or order operation was added.
+
 ## Nine-workflow parity audit — 31 October 2026
 
 - Rechecked workflows 1–9 against the original source and recorded command, state, handoff, example, and data-source coverage in `PARITY_AUDIT_1_TO_9.md`.

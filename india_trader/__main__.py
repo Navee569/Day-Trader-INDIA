@@ -23,6 +23,8 @@ from . import budget_manager
 from . import risk_manager
 from . import paper_broker
 from . import alerts
+from . import earnings_analyst
+from . import insider_tracker
 
 
 def attach_bars(p, symbol_optional=False):
@@ -64,6 +66,10 @@ def main(argv=None):
         return paper_broker.main(argv[1:])
     if argv and argv[0] == "alerts":
         return alerts.main(argv[1:])
+    if argv and argv[0] == "earnings-analyst":
+        return earnings_analyst.main(argv[1:])
+    if argv and argv[0] == "insider-tracker":
+        return insider_tracker.main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m india_trader", description="NSE/BSE cash-equity research; PAPER ONLY")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scanner", help="Full NSE EQ universe, daily setup, and marketwide ORB scanner")
@@ -75,6 +81,8 @@ def main(argv=None):
     sub.add_parser("risk-manager", help="Batch paper risk checks and exact-order verdicts")
     sub.add_parser("broker", help="Paper tickets, approval log, simulated fills and flatten")
     sub.add_parser("alerts", help="IST market clock and once-only paper price/time alerts")
+    sub.add_parser("earnings-analyst", help="NSE filed quarterly earnings, comparisons and TTM metrics")
+    sub.add_parser("insider-tracker", help="Public NSE insider disclosures, once-only alerts and XBRL transactions")
     f = sub.add_parser("fetch", help="Fetch 5-minute bars: read-only Upstox if configured, then Yahoo")
     f.add_argument("symbol")
     f.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")

@@ -1,0 +1,12 @@
+---
+name: india-trader-analyst
+description: Analyze NSE-listed companies' filed quarterly earnings, same-quarter growth, margins and trailing twelve months for paper-trading research. Use for Indian earnings or financial results questions.
+---
+
+# India Trader Earnings Analyst
+
+Run `python -m india_trader earnings-analyst RELIANCE` for an NSE company, or omit tickers to use `trader/watchlist.json`. Use `--quarters 8` for a longer table, `--basis standalone` when that reporting basis is wanted, `--json` for all values and filing links, and `--metrics trader/metrics.json` to merge spreadsheet-ready summaries. `--isin INE002A01018` resolves a company from the current official NSE EQ universe; `--universe PATH` can use a saved NSE CSV or `ticker|name|ISIN` list. `--as-of` pins an offset-aware IST filing cutoff. `--offline DIR` replays `integrated-SYMBOL.json`, `quarterly-SYMBOL.json`, `annual-SYMBOL.json`, `announcements-SYMBOL.json`, and `xbrl/FILENAME.xml`; ISIN lookup also needs `EQUITY_L.csv` or `--universe`. The command never places orders.
+
+The analyst reads NSE's public integrated financial filings and older quarterly/annual result indexes, then parses linked NSE XBRL. It keeps consolidated and standalone results separate, prefers the latest revised filing, uses INR facts, compares each quarter with the same quarter a year earlier, derives a missing March fourth quarter only from a complete annual result and the three quarters within it, and calculates trailing four-quarter sums only from consecutive complete periods. A derived fourth-quarter EPS is approximate. Missing gross profit remains blank. When a filed operating-profit fact is absent, the displayed operating margin is explicitly a **derived pre-exceptional EBIT proxy**; do not call it a filed operating margin.
+
+Open the linked XBRL filing and any company release or result PDF before asserting management guidance, one-off explanations, or segment context. The source index can be incomplete or change shape, and some XBRL filings may fail to parse; report `filing_status.partial`, failed URLs and the latest-period warning. The next earnings date is not guaranteed by the filed facts: check the company investor-relations page or a current exchange board-meeting disclosure, cite its source, and flag a report scheduled during a planned holding period. A stop does not prevent an overnight earnings gap. If the user supplies a transcript, summarize what it actually says and keep it separate from filed numbers. Never infer a buy/sell decision or invent an unavailable quarter.

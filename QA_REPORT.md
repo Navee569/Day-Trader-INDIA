@@ -1,5 +1,18 @@
 # Independent re-audit — India Day Trader v0.2.1
 
+## Eleventh workflow validation — 1 November 2026
+
+- The new Insider Tracker is mapped to the upstream Congress PTR tracker in `PARITY_AUDIT_11.md`. Four new offline tests cover current/archived NSE XBRL layouts, multiple named transaction contexts, date and name filters, a future/revision cutoff, once-only state, dry run, offline fetch, bad XBRL and untrusted filing URLs.
+- `python -m unittest discover -s tests -v`: **199 tests passed** on Windows Python 3.11.2. A live read-only `insider-tracker index --current-only --since 2026-10-30 --read --limit 1 --json` parsed NSE filing `current:4108` for GRADIENTE, posted 31 October 2026 16:48:46 IST, with one promoter/director transaction, trade date 29 October and filing date 31 October. A separate `fetch archive:563850 --symbol RELIANCE --json` parsed two people from an older NSE XBRL filing. The older XML marked its reported-value field with unitRef `shares`; output preserves this mismatch instead of calling it INR.
+- The two public NSE index endpoints returned data, but their full history, completeness and market-hour latency are unverified. BSE-only disclosures and a legal-lateness verdict are not supported. The tool is read-only except its local once-only state, has no scheduled delivery, and does not create orders or claim a trading advantage.
+
+## Tenth workflow validation — 1 November 2026
+
+- The new NSE Earnings Analyst is documented in `PARITY_AUDIT_10.md`. Offline tests cover issuer/basis/filing cutoff filters, INR XBRL units and identity, annual-minus-three-quarter derivation, same-quarter growth, TTM completeness, bank fields, release link matching, ISIN lookup and metrics export.
+- Read-only public NSE smoke at a pinned 1 November 2026 12:00 IST cutoff parsed RELIANCE consolidated six-quarter results and HDFCBANK consolidated six-quarter results. RELIANCE's September 2026 filing was published 30 October 2026 21:32:55 IST. Its XBRL yielded revenue INR 332,861 crore, net profit INR 29,250 crore and diluted EPS INR 18.88; the output linked a separate official NSE press-release PDF candidate. HDFCBANK yielded filed total income INR 129,358.69 crore, net profit INR 20,700.03 crore and diluted EPS INR 13.41, with gross margin blank. These are filing reads, not trading signals. `examples/METRICS_INDIA.json` records a dated two-company metrics snapshot.
+- NSE public endpoints and some taxonomy shapes may change; BSE-only filings, automatic press-release narrative parsing, call transcripts, next-report dates, and independent source reconciliation were not validated. `--isin INE002A01018` resolved RELIANCE through the public NSE EQ universe and produced the same latest consolidated quarter. A separate `--basis standalone` run yielded RELIANCE's September 2026 standalone revenue INR 174,668 crore and net profit INR 15,354 crore without mixing it with consolidated figures.
+- `python -m unittest discover -s tests -v`: **195 tests passed** on Windows Python 3.11.2. `python -m compileall -q india_trader`: passed. The bundled skill-creator `quick_validate.py` could not run because this Python environment lacks PyYAML (`ModuleNotFoundError: yaml`); the skill frontmatter, discoverable repo path, and references were inspected directly. A fresh-session Codex discovery check was not run.
+
 ## Nine-workflow parity pass — 31 October 2026
 
 - Compared the original workflows 1–9 at the command, state, handoff, and example level. The detailed mapping and the India-specific limits are in `PARITY_AUDIT_1_TO_9.md`.
