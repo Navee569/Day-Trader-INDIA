@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from datetime import datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 import json
+import io
+import os
 from pathlib import Path
 import re
 import sys
+import time as time_module
 
 from .budget_manager import BudgetError, clock, ticker
 from .core import IST
 from .market_scanner import OPEN, ScanError, chart_path, trading_day, yahoo_get
+from . import calendar_source
 
 
 class AlertError(Exception):
@@ -75,6 +80,7 @@ def _write(path, data):
 
 def market_clock(now):
     ok, reason = trading_day(now.date())
+    calendar = calendar_source.status(now.date())
     opened = ok and OPEN <= now.time() < SESSION_END
     if ok:
         reason = "regular research session" if opened else "before open" if now.time() < OPEN else "after research close"
@@ -89,8 +95,9 @@ def market_clock(now):
             "exchange": "NSE", "session_open": opened, "trading_day": ok,
             "opens_ist": "09:15" if ok else None, "research_closes_ist": "15:15" if ok else None,
             "next_open_ist": next_open, "reason": reason,
-            "calendar_verified": now.year == 2026,
-            "calendar_note": "Known 2026 NSE normal sessions only; special sessions/BSE hours unverified",
+            "calendar_verified": now.year == 2026 or calendar["verified"],
+            "calendar_note": ("Public NSE calendar refreshed; special sessions fail closed"
+                              if calendar["verified"] else "Known 2026 NSE normal sessions only; refresh public market calendar for later years"),
             "mode": "PAPER_ONLY"}
 
 
@@ -172,12 +179,21 @@ def parse_yahoo(payload, sym):
 def quotes_for(symbols, offline=None):
     found, errors = {}, []
     for sym in dict.fromkeys(symbols):
+        attempts = []
+        if not offline and os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
+            try:
+                from .intraday_sources import upstox_quote
+                found[sym] = upstox_quote(sym)
+                continue
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                attempts.append({"source": "Upstox", "status": "FAILED", "reason": type(exc).__name__})
         try:
             if offline:
                 payload = (Path(offline) / f"yahoo-{sym}.json").read_text(encoding="utf-8")
             else:
                 payload = yahoo_get(chart_path(sym, "1d", "1d"))
             found[sym] = parse_yahoo(payload, sym)
+            found[sym]["provider_attempts"] = attempts
         except (OSError, ScanError, AlertError) as exc:
             errors.append({"ticker": sym, "error": str(exc)})
     return found, errors
@@ -332,6 +348,71 @@ def _holdings(path, plan_path):
     return list(dict.fromkeys(syms))
 
 
+def watch_loop(check_fn, now_fn, sleep_fn, emit, every=30, until=time(15, 30), max_checks=None):
+    """Foreground paper alert poller; check_fn persists once-only state."""
+    if not 5 <= every <= 900 or max_checks is not None and max_checks < 1:
+        raise AlertError("watch needs --every 5..900 seconds and positive --max-checks")
+    checks = 0
+    while True:
+        now = now_fn().astimezone(IST)
+        market = market_clock(now)
+        if not market["trading_day"] or now.time() >= until:
+            return checks
+        result = check_fn()
+        checks += 1
+        for ring in result.get("rings", []):
+            emit({"kind": "ring", "at": now.isoformat(), **ring})
+        for error in result.get("quote_errors", []):
+            emit({"kind": "quote_error", "at": now.isoformat(), **error})
+        if max_checks is not None and checks >= max_checks:
+            return checks
+        sleep_fn(every)
+
+
+def _watch_main(a):
+    if a.now:
+        raise AlertError("watch uses the live IST clock; --now is for a single replay check")
+    until = _hhmm(a.until)
+    if until <= OPEN or until > time(15, 30):
+        raise AlertError("watch --until must be after 09:15 and no later than 15:30 IST")
+    args = ["--rules", a.rules, "--state", a.state, "--prices", a.prices,
+            "--plan", a.plan, "--portfolio", a.portfolio, "check", "--json",
+            "--source", a.source]
+    if a.offline:
+        args += ["--offline", a.offline]
+    def check_once():
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            rc = main(args)
+        try:
+            result = json.loads(captured.getvalue())
+        except json.JSONDecodeError as exc:
+            raise AlertError("paper alert check failed; inspect the error above") from exc
+        if rc not in (0, 1) or not isinstance(result, dict) or "rings" not in result:
+            raise AlertError("paper alert check returned an invalid result")
+        return result
+    def emit(event):
+        path = Path(a.log)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, allow_nan=False) + "\n")
+        if a.json:
+            print(json.dumps(event, allow_nan=False), flush=True)
+        elif event["kind"] == "ring":
+            print("\aALERT " + event["message"], flush=True)
+        else:
+            print("Quote error: " + event.get("ticker", "?") + ": " + event.get("error", ""), flush=True)
+    if not a.json:
+        print("Paper alert watch started; keep this window open. No orders will be placed.", flush=True)
+    count = watch_loop(check_once, lambda: datetime.now(IST), time_module.sleep, emit,
+                       a.every, until, a.max_checks)
+    if a.json:
+        print(json.dumps({"kind": "watch_end", "checks": count, "mode": "PAPER_ONLY"}), flush=True)
+    else:
+        print(f"Paper alert watch ended after {count} check(s).", flush=True)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m india_trader alerts", description="IST paper price/time alerts; never an order")
     p.add_argument("--now", help="IST replay clock; offset-aware ISO preferred")
@@ -367,6 +448,13 @@ def main(argv=None):
     check.add_argument("--prices-out", help="write fetched dated quotes here")
     check.add_argument("--saved", action="store_true", help="read --prices only, no network")
     check.add_argument("--no-write", action="store_true")
+    watch = sub.add_parser("watch", help="continuously check paper alerts in this foreground window")
+    watch.add_argument("--source", choices=("yahoo", "saved"), default="yahoo")
+    watch.add_argument("--offline", help="saved Yahoo chart-response folder")
+    watch.add_argument("--every", type=float, default=30, help="poll interval in seconds, 5..900")
+    watch.add_argument("--until", default="15:30", help="stop by IST HH:MM, no later than 15:30")
+    watch.add_argument("--max-checks", type=int, help="optional bound for a local smoke run")
+    watch.add_argument("--log", default="trader/state/alert-events.jsonl")
     quote = sub.add_parser("quote", help="get unofficial Yahoo INR quotes")
     quote.add_argument("tickers", nargs="*")
     quote.add_argument("--holdings", action="store_true")
@@ -385,6 +473,8 @@ def main(argv=None):
         if a.command_now is not None:
             a.now = a.command_now
         a.json = a.json or a.command_json
+        if a.command == "watch":
+            return _watch_main(a)
         now = clock(a.now)
         rc = 0
         if a.command == "clock":

@@ -1,6 +1,6 @@
 """Offline checks for official NSE PIT indexes and transaction XBRL."""
 import contextlib
-from datetime import datetime
+from datetime import datetime, date
 import io
 import json
 from pathlib import Path
@@ -89,6 +89,26 @@ class InsiderTests(unittest.TestCase):
         self.assertEqual(people, [])
         people, _ = it.index(Fake(), ["RELIANCE"], ["person"], None, None, None, NOW)
         self.assertEqual(len(people), 2)
+
+    def test_dated_archive_months_and_offline_name(self):
+        calls = []
+        class Fake:
+            def index(self, old, symbol=None, start=None, end=None):
+                calls.append((old, symbol, start, end))
+                if old and start == date(2025, 9, 1):
+                    return [dict(archive(), date="12-Sep-2025 19:02")]
+                return []
+        rows, errors = it.index(Fake(), ["RELIANCE"], since=date(2025, 9, 1),
+                                year=2025, as_of=NOW)
+        self.assertFalse(errors)
+        self.assertEqual(rows[0]["filed_at"], "2025-09-12T19:02:00+05:30")
+        self.assertIn((True, "RELIANCE", date(2025, 9, 1), date(2025, 9, 30)), calls)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            name = "archive-RELIANCE-2025-09-01-2025-09-30.json"
+            (root / name).write_text(json.dumps({"data": [dict(archive(), date="12-Sep-2025 19:02")]}))
+            self.assertEqual(len(it.Fetcher(root).index(True, "RELIANCE",
+                           date(2025, 9, 1), date(2025, 9, 30))), 1)
 
     def test_offline_new_once_only_and_dry_run(self):
         with tempfile.TemporaryDirectory() as folder:

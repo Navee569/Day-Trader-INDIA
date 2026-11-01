@@ -25,6 +25,8 @@ from . import paper_broker
 from . import alerts
 from . import earnings_analyst
 from . import insider_tracker
+from . import calendar_source
+from . import paper_monitor
 
 
 def attach_bars(p, symbol_optional=False):
@@ -70,6 +72,10 @@ def main(argv=None):
         return earnings_analyst.main(argv[1:])
     if argv and argv[0] == "insider-tracker":
         return insider_tracker.main(argv[1:])
+    if argv and argv[0] == "market-calendar":
+        return calendar_source.main(argv[1:])
+    if argv and argv[0] == "paper-monitor":
+        return paper_monitor.main(argv[1:])
     p = argparse.ArgumentParser(prog="python -m india_trader", description="NSE/BSE cash-equity research; PAPER ONLY")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("scanner", help="Full NSE EQ universe, daily setup, and marketwide ORB scanner")
@@ -83,6 +89,8 @@ def main(argv=None):
     sub.add_parser("alerts", help="IST market clock and once-only paper price/time alerts")
     sub.add_parser("earnings-analyst", help="NSE filed quarterly earnings, comparisons and TTM metrics")
     sub.add_parser("insider-tracker", help="Public NSE insider disclosures, once-only alerts and XBRL transactions")
+    sub.add_parser("market-calendar", help="Refresh public NSE/BSE holiday data and inspect session status")
+    sub.add_parser("paper-monitor", help="Scheduled foreground paper alerts, news, earnings and insider checks")
     f = sub.add_parser("fetch", help="Fetch 5-minute bars: read-only Upstox if configured, then Yahoo")
     f.add_argument("symbol")
     f.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
@@ -281,7 +289,7 @@ def main(argv=None):
         else:
             result = {"status":"OK", "python":sys.version.split()[0],
                       "timezone":"UTC+05:30 fixed IST", "orders_possible":False,
-                      "market_data_connectivity":"NOT_CHECKED", "provider":"Yahoo unofficial; live connectivity not tested"}
+                      "market_data_connectivity":"NOT_CHECKED", "provider":"Upstox/FYERS optional; Yahoo unofficial; live connectivity not tested"}
         if getattr(args,"out",None) and args.cmd != "universe":
             save_json(args.out,result)
         print(json.dumps(result,indent=2,allow_nan=False,ensure_ascii=False))

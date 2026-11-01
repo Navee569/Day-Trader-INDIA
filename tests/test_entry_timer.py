@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from india_trader import entry_timer as e
 from india_trader.core import IST
@@ -72,9 +73,17 @@ class EntryTimerTests(unittest.TestCase):
 
     def test_bse_cash_chart_uses_explicit_calendar_proxy_note(self):
         c = e.parse_chart(chart(ticker="500325.BO"), "500325.BO", "5m")
-        result = e.evaluate(c, at("09:40"))
+        with patch.object(e.calendar_source, "status", return_value={"state": "UNKNOWN"}):
+            result = e.evaluate(c, at("09:40"))
         self.assertEqual(result["status"], "TRIGGERED")
         self.assertIn("BSE closures unverified", result["calendar_note"])
+
+    def test_bse_public_calendar_closure_blocks_entry(self):
+        c = e.parse_chart(chart(ticker="500325.BO"), "500325.BO", "5m")
+        with patch.object(e.calendar_source, "status", return_value={"state": "SPECIAL", "reason": "Muhurat"}):
+            result = e.evaluate(c, at("09:40"))
+        self.assertEqual(result["status"], "MARKET_CLOSED")
+        self.assertIn("BSE special", result["reason"])
 
     def test_preopen_watch_waits_without_fetching(self):
         current = [at("09:00")]
@@ -136,6 +145,35 @@ class EntryTimerTests(unittest.TestCase):
             rows = json.loads(output.getvalue())
             self.assertEqual(rows[0]["result"]["status"], "TRIGGERED")
             self.assertIsNotNone(rows[1]["error"])
+
+    def test_configured_upstox_precedes_yahoo_and_labels_fallback(self):
+        day = datetime(2026, 10, 28, tzinfo=IST).date()
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_chart", return_value=(chart(), "Upstox read-only")) as up, \
+                patch("india_trader.entry_timer._fetch_yahoo") as yahoo:
+            result = e.get_chart("RELIANCE.NS", "5m", day)
+        self.assertEqual(result["source"], "Upstox read-only")
+        up.assert_called_once()
+        yahoo.assert_not_called()
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_chart", side_effect=ValueError("test")), \
+                patch("india_trader.entry_timer._fetch_yahoo", return_value=chart()):
+            result = e.get_chart("RELIANCE.NS", "5m", day)
+        self.assertIn("Yahoo", result["source"])
+        self.assertEqual(result["provider_attempts"][0]["status"], "FAILED")
+
+    def test_fyers_between_upstox_and_yahoo(self):
+        day = datetime(2026, 10, 28, tzinfo=IST).date()
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token",
+                                    "FYERS_APP_ID": "APP-100", "FYERS_ACCESS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_chart", side_effect=ValueError("test")), \
+                patch("india_trader.intraday_sources.fyers_chart", return_value=(chart(), "FYERS read-only")) as fyers, \
+                patch("india_trader.entry_timer._fetch_yahoo") as yahoo:
+            result = e.get_chart("RELIANCE.NS", "5m", day)
+        self.assertEqual(result["source"], "FYERS read-only")
+        self.assertEqual(result["provider_attempts"][0]["source"], "Upstox")
+        fyers.assert_called_once()
+        yahoo.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import urllib.parse
 
 from .core import IST, symbol as normalize_symbol
 from .universe import load_bse_equities, load_nse_equities
+from . import calendar_source
 
 UA = "Mozilla/5.0 (compatible; IndiaDayTraderPaper/0.2)"
 YAHOO_HOSTS = ("https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com")
@@ -109,12 +110,20 @@ def parse_hhmm(text, flag="--at"):
 
 
 def trading_day(d):
-    if d.year not in CALENDAR_YEARS:
-        return False, "NSE holiday calendar not verified for %s" % d.year
-    if d.weekday() >= 5:
-        return False, "weekend"
-    name = NSE_HOLIDAYS.get(d.isoformat())
-    return (False, "NSE holiday: " + name) if name else (True, "")
+    if d.year in CALENDAR_YEARS:
+        if d.weekday() >= 5:
+            return False, "weekend"
+        name = NSE_HOLIDAYS.get(d.isoformat())
+        if name:
+            return False, "NSE holiday: " + name
+    dynamic = calendar_source.status(d)
+    if dynamic["state"] == "NORMAL":
+        return True, ""
+    if dynamic["state"] in ("CLOSED", "SPECIAL"):
+        return False, "NSE " + dynamic["state"].lower() + ": " + dynamic["reason"]
+    if d.year in CALENDAR_YEARS:
+        return True, ""
+    return False, "NSE holiday calendar not verified for %s" % d.year
 
 
 def session(d):
@@ -259,7 +268,7 @@ def parse_spark(text_or_doc, wanted=None):
 def parse_chart(text_or_doc, sym=""):
     """v8 chart JSON -> series. Raises ScanError for Yahoo's 'no data' answers."""
     try:
-        doc = json.loads(text_or_doc) if isinstance(text_or_doc, str) else text_or_doc
+        doc = json.loads(text_or_doc) if isinstance(text_or_doc, (str, bytes, bytearray)) else text_or_doc
         chart = doc["chart"]
     except (ValueError, KeyError, TypeError):
         raise ScanError("Yahoo returned something unexpected for %s" % sym)
@@ -673,7 +682,7 @@ def progress(a, msg):
         print(msg, file=sys.stderr)
 
 
-def fetch_spark(symbols, rng, interval, pause, a=None):
+def fetch_spark(symbols, rng, interval, pause, a=None, day=None):
     """Batches of 20. -> ({SYM: series}, {SYM: error})."""
     data, failed = {}, {}
     batches = [symbols[i:i + SPARK_MAX] for i in range(0, len(symbols), SPARK_MAX)]
@@ -694,6 +703,33 @@ def fetch_spark(symbols, rng, interval, pause, a=None):
                 failed[s] = "no data from Yahoo"
         if a is not None and len(batches) > 25 and (k + 1) % 50 == 0:
             progress(a, "  spark %d of %d requests" % (k + 1, len(batches)))
+    if interval == "5m" and a is not None and failed and (
+            os.environ.get("UPSTOX_ANALYTICS_TOKEN") or
+            (os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"))):
+        missing = [s for s in symbols if s in failed]
+        cap = getattr(a, "max_source_fallback", 0)
+        if cap:
+            missing = missing[:cap]
+        for sym in missing:
+            if pause:
+                SLEEP(pause)
+            for provider in ("upstox", "fyers"):
+                if provider == "upstox" and not os.environ.get("UPSTOX_ANALYTICS_TOKEN"):
+                    continue
+                if provider == "fyers" and (not sym.endswith(".NS") or not os.environ.get("FYERS_APP_ID") or
+                                            not os.environ.get("FYERS_ACCESS_TOKEN")):
+                    continue
+                try:
+                    from .intraday_sources import upstox_chart, fyers_chart
+                    raw, label = (upstox_chart if provider == "upstox" else fyers_chart)(
+                        sym, range_=rng, interval=5, end_day=day)
+                    series = parse_chart(raw, sym)
+                    series["meta"]["data_provider"] = label
+                    data[sym] = series
+                    failed.pop(sym, None)
+                    break
+                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
+                    failed[sym] = provider + " stage-one fallback failed: " + type(exc).__name__
     return data, failed
 
 
@@ -897,6 +933,7 @@ def cmd_orb(a):
     day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day)
     symbols = read_symbols(a, offline_syms)
     confirm = None
+    confirmation_source = {}
     if not a.offline:
         today = to_ist(parse_now(None)).date()
         if (today - day).days > 6:
@@ -904,7 +941,7 @@ def cmd_orb(a):
         rng = "1d" if day == today else "5d"
         progress(a, "Stage 1: 5-minute closes for %s symbols (%d spark requests)..."
                  % ("{:,}".format(len(symbols)), (len(symbols) + SPARK_MAX - 1) // SPARK_MAX))
-        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a)
+        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a, day)
         done = []
 
         def confirm(sym):
@@ -913,9 +950,31 @@ def cmd_orb(a):
             done.append(sym)
             if len(done) % 50 == 0:
                 progress(a, "  stage 2: %d v8 charts so far" % len(done))
+            if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
+                try:
+                    from .intraday_sources import upstox_chart
+                    raw, source = upstox_chart(sym, range_=rng, interval=BAR_MIN, end_day=day)
+                    result = parse_chart(raw, sym)
+                    confirmation_source[sym] = source
+                    return result
+                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
+                    confirmation_source[sym] = "Yahoo fallback (Upstox " + type(exc).__name__ + ")"
+            if sym.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
+                try:
+                    from .intraday_sources import fyers_chart
+                    raw, source = fyers_chart(sym, range_=rng, interval=BAR_MIN, end_day=day)
+                    result = parse_chart(raw, sym)
+                    confirmation_source[sym] = source
+                    return result
+                except (OSError, ValueError, TypeError, KeyError, ScanError) as exc:
+                    confirmation_source[sym] = "Yahoo fallback (FYERS " + type(exc).__name__ + ")"
+            confirmation_source.setdefault(sym, "Yahoo Finance unofficial")
             return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN)), sym)
     hits, counts, failed2 = scan_orb(data, symbols, day, cutoff, a.or_minutes, a.min_price, a.min_volume, confirm,
                                      a.max_confirm)
+    if confirmation_source:
+        for hit in hits:
+            hit["confirmation_source"] = confirmation_source.get(hit["symbol"])
     failed = dict(failed or {})
     failed.update(failed2)
     nfailed = len([s for s in symbols if s in failed])
@@ -929,9 +988,15 @@ def cmd_orb(a):
            "data_timeliness_unverified": True,
            "status": "NO_USABLE_CHARTS" if not counts["scanned"] else
                      ("PARTIAL" if nfailed or counts["unconfirmed"] or counts["unusable"] else "OK"),
-           "source": "offline Yahoo fixture" if a.offline else "Yahoo Finance unofficial",
+           "source": "offline Yahoo fixture" if a.offline else
+                     ("Yahoo stage-one spark with optional Upstox/FYERS recovery; "
+                      "Upstox/FYERS optional stage-two charts, Yahoo fallback"
+                      if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip() or
+                      (os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"))
+                      else "Yahoo Finance unofficial"),
            "exchange_counts": exchange_counts(symbols),
-           "calendar_source": "NSE 2026 equities holidays; BSE differences not verified",
+           "calendar_source": "NSE built-in 2026 holidays plus fresh public NSE calendar; "
+                              "special sessions fail closed; BSE sessions not verified for ORB",
            "or_minutes": a.or_minutes,
            "interval": "%dm" % BAR_MIN,
            "filters": {"min_price": a.min_price, "min_volume": a.min_volume}, "note": NOTE, "hits": hits}
@@ -942,8 +1007,9 @@ def cmd_orb(a):
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
-    print("Opening-range breakout scan, %s %s IST: %d-minute range (9:15 to %s), 5-minute bars, Yahoo."
-          % (day_label(day), clock_label(cutoff), a.or_minutes, clock_label(slot(day, a.or_minutes // BAR_MIN))))
+    print("Opening-range breakout scan, %s %s IST: %d-minute range (9:15 to %s), 5-minute bars, %s."
+          % (day_label(day), clock_label(cutoff), a.or_minutes,
+             clock_label(slot(day, a.or_minutes // BAR_MIN)), doc["source"]))
     print("Fetched %s of %s charts%s; %s usable%s; %s candidates, %s confirmed with real highs and lows."
           % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
              (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
@@ -1014,6 +1080,8 @@ def main(argv=None):
     p.add_argument("--or-minutes", type=int, default=15)
     p.add_argument("--max-confirm", type=int, default=MAX_CONFIRM,
                    help="v8 charts to fetch in stage 2, most traded first (%d; 0 = all)" % MAX_CONFIRM)
+    p.add_argument("--max-source-fallback", type=int, default=0,
+                   help="limit per-symbol Upstox/FYERS stage-one recovery (0 = all missing charts)")
     p.add_argument("--at", help="cut the clock at this India time, HH:MM")
     p.add_argument("--until", help="no new entries after HH:MM (default: config no_entries_after, 15:10)")
     p.add_argument("--config", default="trader/config.json")
@@ -1027,6 +1095,8 @@ def main(argv=None):
                 raise ScanError("pause, price, volume, and show must be nonnegative")
             if a.cmd == "orb" and a.max_confirm < 0:
                 raise ScanError("--max-confirm must be zero or positive")
+            if a.cmd == "orb" and a.max_source_fallback < 0:
+                raise ScanError("--max-source-fallback must be zero or positive")
         return {"universe": cmd_universe, "daily": cmd_daily, "orb": cmd_orb}[a.cmd](a)
     except (ScanError, ValueError, OSError) as e:
         print("scan.py: %s" % e, file=sys.stderr)

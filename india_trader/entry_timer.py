@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 import gzip
 import hashlib
 import json
+import os
 import math
 from pathlib import Path
 import sys
@@ -15,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from .core import IST, symbol
+from . import calendar_source
 from .market_scanner import trading_day
 
 OPEN, END = time(9, 15), time(15, 15)  # conservative CAS-safe continuous-bar end
@@ -116,7 +118,7 @@ def _fetch_yahoo(sym, interval, day):
     raise EntryError("Yahoo chart unavailable at both hosts: " + ", ".join(errors))
 
 
-def parse_chart(raw, sym, interval):
+def parse_chart(raw, sym, interval, source="Yahoo Finance unofficial"):
     """Validate one Yahoo chart; null OHLC becomes a gap, never a synthetic bar."""
     try:
         doc = json.loads(raw)
@@ -158,14 +160,36 @@ def parse_chart(raw, sym, interval):
             rows.append({"time": when, "open": round(o, 2), "high": round(h, 2),
                          "low": round(l, 2), "close": round(c, 2), "volume": v})
         return {"ticker": sym, "interval": interval, "bars": rows,
-                "data_time": data_time, "source": "Yahoo Finance unofficial"}
+                "data_time": data_time, "source": source}
     except (ValueError, TypeError, KeyError, IndexError, OverflowError, OSError) as exc:
         raise EntryError(f"invalid chart for {sym}: {exc}") from exc
 
 
 def get_chart(sym, interval, day, offline=None):
-    raw = _read_offline(offline, sym) if offline else _fetch_yahoo(sym, interval, day)
-    return parse_chart(raw, sym, interval)
+    if offline:
+        return parse_chart(_read_offline(offline, sym), sym, interval)
+    attempts = []
+    age = (datetime.now(IST).date() - day).days
+    rng = "1d" if age == 0 else "5d" if age <= 4 else "1mo" if age <= 28 else "60d"
+    if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
+        try:
+            from .intraday_sources import upstox_chart
+            raw, source = upstox_chart(sym, range_=rng, interval=int(interval[:-1]), end_day=day)
+            return parse_chart(raw, sym, interval, source)
+        except (OSError, ValueError, TypeError, KeyError, EntryError) as exc:
+            attempts.append({"source": "Upstox", "status": "FAILED", "reason": type(exc).__name__})
+    if sym.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
+        try:
+            from .intraday_sources import fyers_chart
+            raw, source = fyers_chart(sym, range_=rng, interval=int(interval[:-1]), end_day=day)
+            result = parse_chart(raw, sym, interval, source)
+            result["provider_attempts"] = attempts
+            return result
+        except (OSError, ValueError, TypeError, KeyError, EntryError) as exc:
+            attempts.append({"source": "FYERS", "status": "FAILED", "reason": type(exc).__name__})
+    result = parse_chart(_fetch_yahoo(sym, interval, day), sym, interval)
+    result["provider_attempts"] = attempts
+    return result
 
 
 def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
@@ -193,6 +217,7 @@ def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
     base = {"mode": "PAPER_RESEARCH_ONLY", "ticker": chart["ticker"], "setup": setup,
             "as_of": now.isoformat(), "bar_interval": interval, "opening_minutes": or_minutes,
             "data_origin": chart["source"], "data_verified_against_exchange": False,
+            "provider_attempts": chart.get("provider_attempts", []),
             "calendar_note": ("NSE 2026 normal-session calendar used as a proxy; BSE closures unverified"
                               if chart["ticker"].endswith(".BO") else "NSE 2026 normal-session calendar"),
             "orders_possible": False, "status": "WAIT", "reason": "", "level": level,
@@ -201,6 +226,14 @@ def evaluate(chart, now, setup="orb", level=None, interval="5m", or_minutes=15,
             "data_time": chart["data_time"].isoformat() if chart["data_time"] else None,
             "min_volume_x": min_volume_x}
     valid, why = trading_day(day)
+    if chart["ticker"].endswith(".BO"):
+        bse_session = calendar_source.status(day, "BSE")
+        if bse_session["state"] == "NORMAL":
+            valid, why = True, ""
+            base["calendar_note"] = "BSE current-year public normal-session calendar"
+        elif bse_session["state"] in ("CLOSED", "SPECIAL"):
+            valid, why = False, "BSE " + bse_session["state"].lower() + ": " + bse_session["reason"]
+            base["calendar_note"] = "BSE current-year public calendar; special-session entry timing unsupported"
     if not valid:
         return dict(base, status="MARKET_CLOSED", reason=why)
     if live and chart["data_time"] is None:

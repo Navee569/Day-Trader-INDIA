@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from india_trader import alerts as a
 from india_trader.budget_manager import _price_record
@@ -25,6 +26,34 @@ def chart(ticker="RELIANCE.NS", price=94, prev=100, when=None, currency="INR"):
 
 
 class AlertTests(unittest.TestCase):
+    def test_upstox_quote_then_labeled_yahoo_fallback(self):
+        good = {"ticker": "RELIANCE.NS", "price": 100, "prev_close": 99,
+                "time": NOW.isoformat(), "source": "Upstox read-only", "currency": "INR"}
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_quote", return_value=good), \
+                patch("india_trader.alerts.yahoo_get") as yahoo:
+            quotes, errors = a.quotes_for(["RELIANCE.NS"])
+        self.assertFalse(errors)
+        self.assertEqual(quotes["RELIANCE.NS"]["source"], "Upstox read-only")
+        yahoo.assert_not_called()
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_quote", side_effect=ValueError("test")), \
+                patch("india_trader.alerts.yahoo_get", return_value=chart()):
+            quotes, errors = a.quotes_for(["RELIANCE.NS"])
+        self.assertFalse(errors)
+        self.assertIn("Yahoo", quotes["RELIANCE.NS"]["source"])
+        self.assertEqual(quotes["RELIANCE.NS"]["provider_attempts"][0]["status"], "FAILED")
+
+    def test_foreground_watch_emits_once_and_is_bounded(self):
+        events, sleeps = [], []
+        reports = iter([{"rings": [{"message": "paper stop"}], "quote_errors": []},
+                        {"rings": [], "quote_errors": []}])
+        checks = a.watch_loop(lambda: next(reports), lambda: NOW, sleeps.append, events.append,
+                              every=5, max_checks=2)
+        self.assertEqual(checks, 2)
+        self.assertEqual([x["message"] for x in events], ["paper stop"])
+        self.assertEqual(sleeps, [5])
+
     def test_ist_calendar_clock_and_closed_day_fail_closed(self):
         self.assertTrue(a.market_clock(NOW)["session_open"])
         self.assertFalse(a.market_clock(datetime(2026, 10, 20, 10, tzinfo=IST))["trading_day"])

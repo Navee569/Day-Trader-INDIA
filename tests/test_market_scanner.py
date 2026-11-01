@@ -2,11 +2,14 @@
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from india_trader import market_scanner as m
 from india_trader.core import IST
@@ -38,6 +41,21 @@ def chart(ticker, series):
 
 
 class MarketScannerTests(unittest.TestCase):
+    def test_bse_stage_one_recovers_from_yahoo_gap_with_upstox(self):
+        ticker = "500325.BO"
+        payload = json.dumps(chart(ticker, bars([100, 100, 100, 105, 106]))).encode()
+        args = SimpleNamespace(max_source_fallback=0, json=True, quiet=True)
+        with patch.dict(os.environ, {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch.object(m, "yahoo_get", return_value=b"{}"), \
+                patch.object(m, "parse_spark", return_value={}), \
+                patch("india_trader.intraday_sources.upstox_chart",
+                      return_value=(payload, "Upstox read-only")) as up:
+            data, failed = m.fetch_spark([ticker], "1d", "5m", 0, args, DAY)
+        self.assertIn(ticker, data)
+        self.assertEqual(data[ticker]["meta"]["data_provider"], "Upstox read-only")
+        self.assertEqual(failed, {})
+        up.assert_called_once()
+
     def test_ist_window_and_holiday(self):
         self.assertEqual(m.to_ist(datetime(2026, 10, 28, 4, 0)), datetime(2026, 10, 28, 9, 30))
         self.assertFalse(m.trading_day(date(2026, 10, 20))[0])

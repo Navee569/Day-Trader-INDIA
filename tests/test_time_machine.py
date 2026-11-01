@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from india_trader.core import IST
 from india_trader.market_scanner import trading_day
@@ -49,6 +50,13 @@ def fixture(session_count=22, gap=None, interval="5m"):
 
 
 class TimeMachineTests(unittest.TestCase):
+    def test_upstox_preferred_for_sixty_day_chart(self):
+        with patch.dict("os.environ", {"UPSTOX_ANALYTICS_TOKEN": "test-token"}), \
+                patch("india_trader.intraday_sources.upstox_chart", return_value=(b"{}", "Upstox 60d")) as up:
+            raw, source = m.fetch_chart("RELIANCE.NS")
+        self.assertEqual((raw, source), (b"{}", "Upstox 60d"))
+        up.assert_called_once_with("RELIANCE.NS", range_="60d", interval=5)
+
     def test_replay_is_seeded_and_excludes_plan_day(self):
         raw, days = fixture()
         plan = m.normalize_plan(PLAN)

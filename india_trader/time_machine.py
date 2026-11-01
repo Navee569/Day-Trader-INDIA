@@ -13,6 +13,7 @@ import gzip
 import io
 import json
 import math
+import os
 from pathlib import Path
 import random
 import statistics
@@ -166,6 +167,20 @@ def normalize_plan(raw):
 
 
 def fetch_chart(sym):
+    fallbacks = []
+    if os.environ.get("UPSTOX_ANALYTICS_TOKEN", "").strip():
+        try:
+            from .intraday_sources import upstox_chart
+            return upstox_chart(sym, range_="60d", interval=5)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            fallbacks.append("Upstox " + type(exc).__name__)
+    if sym.endswith(".NS") and os.environ.get("FYERS_APP_ID") and os.environ.get("FYERS_ACCESS_TOKEN"):
+        try:
+            from .intraday_sources import fyers_chart
+            return fyers_chart(sym, range_="60d", interval=5)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            fallbacks.append("FYERS " + type(exc).__name__)
+    fallback = " (fallback after " + ", ".join(fallbacks) + ")" if fallbacks else ""
     suffix = urllib.parse.quote(sym, safe="") + "?range=60d&interval=5m"
     failures = []
     for host in ("query2", "query1"):
@@ -177,7 +192,7 @@ def fetch_chart(sym):
                 raw = response.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise MachineError("chart exceeds size limit")
-            return raw, "Yahoo Finance unofficial 60d five-minute chart"
+            return raw, "Yahoo Finance unofficial 60d five-minute chart" + fallback
         except (urllib.error.URLError, TimeoutError, OSError, MachineError) as exc:
             failures.append(type(exc).__name__)
     raise MachineError("Yahoo chart unavailable at both hosts: " + ", ".join(failures))

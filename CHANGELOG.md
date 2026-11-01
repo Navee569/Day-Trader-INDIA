@@ -1,5 +1,19 @@
 # Changelog
 
+## Scheduled paper checks and current-year calendar — 1 November 2026
+
+- Added a no-token public NSE/BSE holiday calendar cache and status command. Normal-session scans fail closed on known special sessions, including the 8 November 2026 Muhurat session; unknown future-year sessions need refresh.
+- Added `paper-monitor once|watch`, local dated event/error logs, a visible Windows launcher and an optional signed-in-user weekday Scheduled Task. It polls alerts, news, insider filings and NSE earnings at separate intervals without placing orders.
+- Added optional Upstox/FYERS recovery when Yahoo's scanner first stage lacks a five-minute chart, including BSE numeric scrip-code coverage through Upstox. Account data remains live untested.
+- The entry timer now checks a fresh public BSE calendar before paper entry; known BSE closures and special sessions block normal-session entry. When unavailable, the output retains its explicit NSE proxy warning.
+- Added five offline calendar/monitor/scanner tests; the suite reached 219 passing tests. BSE earnings XBRL, guaranteed notification delivery and account-based candle validation remain open.
+
+## Paper data and disclosure coverage — 1 November 2026
+
+- Routed locally configured read-only Upstox candles into the entry timer, Time Machine and ORB confirmation, and Upstox V3 quotes into paper alerts. Added optional FYERS historical NSE candle fallback before Yahoo. Added BSE cash-equity Upstox instrument mapping and historical 60-day paging. Live account tokens have not been supplied or tested.
+- Added a foreground paper-alert watcher, event log, and Windows launcher. It polls while its window is open and never places orders.
+- Added official BSE PIT issuer history and inline XBRL parsing for the insider tracker, plus NSE monthly dated archive searches for older symbol/year queries. One recent BSE filing and an NSE September 2025 date query were checked read-only; neither source guarantees complete marketwide historical coverage.
+
 ## Eleventh workflow — India Insider Tracker, 1 November 2026
 
 - Added `insider-tracker index|new|fetch|parse` for official NSE current and archived public PIT filings. It parses XBRL transaction contexts, names/categories, buy/sell/pledge and derivative fields, quantity, reported value with original unit, trade/intimation dates, disclosure lag, and paper-portfolio matches.

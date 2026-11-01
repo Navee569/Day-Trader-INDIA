@@ -14,6 +14,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from .core import IST
+from . import bse_insiders
 
 PAGE = "https://www.nseindia.com/companies-listing/corporate-filings-insider-trading"
 API = "https://www.nseindia.com/api/"
@@ -118,13 +119,19 @@ class Fetcher:
             raise InsiderError(f"public NSE response too large: {url}")
         return body
 
-    def index(self, archive=False, symbol=None):
+    def index(self, archive=False, symbol=None, start=None, end=None):
         endpoint = "corporates-pit" if archive else "corporates-pit-gg"
         params = {"index": "equities"}
         if symbol:
             params["symbol"] = _symbol(symbol)
+        if start or end:
+            if not archive or not symbol or not start or not end or start > end:
+                raise InsiderError("dated NSE archive search needs a symbol and valid date range")
+            params["from_date"] = start.strftime("%d-%m-%Y")
+            params["to_date"] = end.strftime("%d-%m-%Y")
         url = API + endpoint + "?" + urllib.parse.urlencode(params)
-        filename = ("archive" if archive else "current") + ("-" + _symbol(symbol) if symbol else "") + ".json"
+        filename = (("archive" if archive else "current") + ("-" + _symbol(symbol) if symbol else "") +
+                    (f"-{start.isoformat()}-{end.isoformat()}" if start else "") + ".json")
         try:
             doc = json.loads(self.get(url, filename, MAX_INDEX))
         except (ValueError, UnicodeDecodeError) as exc:
@@ -181,6 +188,16 @@ def index(fetch, symbols=(), people=(), since=None, year=None, kind=None, as_of=
             if symbols:
                 for sym in symbols:
                     sources.extend((old, r) for r in fetch.index(old, sym))
+                    if old and ((year and year < 2026) or (since and since < date(2026, 5, 1))):
+                        first = max(date(year, 1, 1) if year else since, since or date.min)
+                        last = min(date(year, 12, 31) if year else cutoff.date(),
+                                   cutoff.date(), date(2026, 4, 30))
+                        day = first
+                        while day <= last:
+                            next_month = (day.replace(day=28) + timedelta(days=4)).replace(day=1)
+                            stop = min(last, next_month - timedelta(days=1))
+                            sources.extend((old, r) for r in fetch.index(old, sym, day, stop))
+                            day = stop + timedelta(days=1)
             else:
                 sources.extend((old, r) for r in fetch.index(old))
         except InsiderError as exc:
@@ -293,10 +310,16 @@ def _portfolio(path):
 def _read(fetch, row, portfolio=(), xml_dir=None):
     public = {k: v for k, v in row.items() if k != "archive_record"}
     if "transactions" not in public:
-        data = fetch.xml(row["xbrl_url"])
-        public["transactions"] = parse_xml(data, row)
+        if row["source"] == "BSE PIT XBRL filing":
+            data = bse_insiders.get_filing(fetch.opener, row["view_url"], fetch.offline)
+            public["transactions"] = bse_insiders.parse_ixbrl(data, row)
+            filename = row["view_url"].rsplit("/", 1)[-1]
+        else:
+            data = fetch.xml(row["xbrl_url"])
+            public["transactions"] = parse_xml(data, row)
+            filename = row["xbrl_url"].rsplit("/", 1)[-1]
         if xml_dir:
-            path = Path(xml_dir) / row["xbrl_url"].rsplit("/", 1)[-1]
+            path = Path(xml_dir) / filename
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
             public["saved_xml"] = str(path)
@@ -316,7 +339,7 @@ def _save(path, doc):
 def _render(rows, errors):
     for row in rows:
         print(f'{row["id"]} {row["filed_at"]} {row["symbol"]} {row["regulation"]} {row["submission"] or ""}')
-        print("  Official filing: " + row["xbrl_url"])
+        print("  Official filing: " + (row.get("xbrl_url") or row.get("view_url") or "local file"))
         for t in row.get("transactions", []):
             print(f'  {t["person"]} ({t["category"]}): {t["transaction_type"]} '
                   f'{t["quantity"]} {t["instrument"]}, reported value {t["value_reported"]} '
@@ -332,19 +355,20 @@ def _render(rows, errors):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m india_trader insider-tracker",
-                                description="Public NSE insider disclosures, paper research only")
+                                description="Public NSE/BSE insider disclosures, paper research only")
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("index", "new", "fetch"):
         q = sub.add_parser(name)
         if name == "fetch":
             q.add_argument("id")
-        q.add_argument("--symbol", action="append", default=[], help="NSE EQ symbol, repeatable")
+        q.add_argument("--symbol", action="append", default=[], help="NSE symbol or six-digit BSE scrip, repeatable")
+        q.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
         q.add_argument("--member", action="append", default=[], help="insider/person name fragment, repeatable")
         q.add_argument("--type", help="regulation text, e.g. 7(2)")
         q.add_argument("--since", help="filing date YYYY-MM-DD")
         q.add_argument("--year", type=int)
         q.add_argument("--as-of", help="offset-aware ISO filing cutoff")
-        q.add_argument("--offline", metavar="DIR", help="saved current/archive JSON and XBRL XML")
+        q.add_argument("--offline", metavar="DIR", help="saved NSE JSON/XML or BSE HTML responses")
         q.add_argument("--current-only", action="store_true", help="omit pre-May-2026 archive")
         q.add_argument("--limit", type=int, default=50)
         q.add_argument("--portfolio", default="trader/portfolio.json")
@@ -356,9 +380,10 @@ def main(argv=None):
     n.add_argument("--state", default="trader/state/insider-tracker.json")
     n.add_argument("--dry-run", action="store_true")
     n.add_argument("--today", help="YYYY-MM-DD first-check date; --as-of remains the filing cutoff")
-    q = sub.add_parser("parse", help="parse saved official NSE XBRL XML")
+    q = sub.add_parser("parse", help="parse saved official NSE XML or BSE inline XBRL HTML")
     q.add_argument("xml")
     q.add_argument("--symbol", help="verify company symbol")
+    q.add_argument("--exchange", choices=("NSE", "BSE"), default="NSE")
     q.add_argument("--portfolio", default="trader/portfolio.json")
     q.add_argument("--tickers", nargs="*", default=[])
     q.add_argument("--filed", help="YYYY-MM-DD, used for lag if XML has no filing date")
@@ -366,11 +391,12 @@ def main(argv=None):
     args = p.parse_args(argv)
     try:
         if args.command == "parse":
-            row = {"symbol": _symbol(args.symbol)} if args.symbol else None
+            row = {"symbol": (bse_insiders.bse_code(args.symbol) + ".BO" if args.exchange == "BSE"
+                              else _symbol(args.symbol))} if args.symbol else None
             if args.filed:
                 row = (row or {}) | {"filed_at": _date(args.filed).isoformat()}
             data = Path(args.xml).read_bytes()
-            records = parse_xml(data, row)
+            records = bse_insiders.parse_ixbrl(data, row) if args.exchange == "BSE" else parse_xml(data, row)
             held = _portfolio(args.portfolio) | {_symbol(x) for x in args.tickers}
             result = {"source_file": str(args.xml), "symbol": records[0]["symbol"],
                       "held_in_portfolio": records[0]["symbol"] in held,
@@ -394,8 +420,42 @@ def main(argv=None):
             if not since:
                 since = _date(prior["baseline_date"]) if prior.get("baseline_date") else today - timedelta(days=45)
         fetch = Fetcher(args.offline)
-        rows, errors = index(fetch, args.symbol, args.member, since, args.year, args.type,
-                             cutoff, not args.current_only)
+        if args.exchange == "BSE":
+            if not args.symbol:
+                raise InsiderError("BSE PIT search needs --symbol with a six-digit scrip code")
+            start = since or (date(args.year, 1, 1) if args.year else cutoff.date() - timedelta(days=45))
+            end = min(cutoff.date(), date(args.year, 12, 31)) if args.year else cutoff.date()
+            if end < start:
+                raise InsiderError("BSE search date range is empty")
+            rows, errors = [], []
+            for raw in args.symbol:
+                code = bse_insiders.bse_code(raw)
+                try:
+                    rows.extend(bse_insiders.index(fetch.opener, code, start, end, args.offline))
+                except bse_insiders.BseError as exc:
+                    errors.append(str(exc))
+            if not rows and errors:
+                raise InsiderError("no BSE filing index available; " + "; ".join(errors))
+            rows = [r for r in rows if datetime.fromisoformat(r["filed_at"]) <= cutoff and
+                    (not args.type or re.sub(r"\s+", "", args.type.casefold()) in "7(2)")]
+            if args.member:
+                filtered = []
+                for row in rows:
+                    try:
+                        records = bse_insiders.parse_ixbrl(
+                            bse_insiders.get_filing(fetch.opener, row["view_url"], fetch.offline), row)
+                        records = [t for t in records if any(p.casefold() in t["person"].casefold()
+                                                               for p in args.member)]
+                        if records:
+                            row["transactions"] = records
+                            filtered.append(row)
+                    except bse_insiders.BseError as exc:
+                        errors.append(f'{row["id"]}: {exc}')
+                rows = filtered
+            rows.sort(key=lambda r: (r["filed_at"], r["id"]), reverse=True)
+        else:
+            rows, errors = index(fetch, args.symbol, args.member, since, args.year, args.type,
+                                 cutoff, not args.current_only)
         if args.command == "fetch":
             if not args.id:
                 raise InsiderError("fetch needs a filing ID from index")
@@ -413,7 +473,7 @@ def main(argv=None):
             for row in rows:
                 try:
                     read_rows.append(_read(fetch, row, portfolio, args.xml_dir))
-                except InsiderError as exc:
+                except (InsiderError, bse_insiders.BseError) as exc:
                     errors.append(f'{row["id"]}: {exc}')
                     read_rows.append({k: v for k, v in row.items() if k != "archive_record"} |
                                      {"read_error": str(exc)})
@@ -432,7 +492,7 @@ def main(argv=None):
         else:
             _render(rows, errors)
         return 0 if rows and not errors else 1 if not rows and not errors else 2
-    except (InsiderError, OSError, ValueError, TypeError, KeyError) as exc:
+    except (InsiderError, bse_insiders.BseError, OSError, ValueError, TypeError, KeyError) as exc:
         print("insider-tracker: " + str(exc), file=sys.stderr)
         return 2
 
